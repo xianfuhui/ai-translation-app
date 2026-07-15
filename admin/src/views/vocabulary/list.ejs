@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="vi">
+<%- include('../partials/head', { title: 'Kho từ vựng' }) %>
+<body>
+<div class="app-shell">
+  <%- include('../partials/sidebar', { active: 'vocabulary', admin: admin }) %>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Quản lý từ vựng</div>
+        <h1>Kho từ vựng hệ thống</h1>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Thêm từ vựng mới</h2>
+      <form method="POST" action="/vocabulary">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="word">Từ vựng</label>
+            <input type="text" id="word" name="word" required />
+          </div>
+          <div class="form-group">
+            <label for="meaning">Nghĩa</label>
+            <input type="text" id="meaning" name="meaning" />
+          </div>
+          <div class="form-group">
+            <label for="sourceLanguage">Ngôn ngữ gốc</label>
+            <input type="text" id="sourceLanguage" name="sourceLanguage" placeholder="vd: en" />
+          </div>
+          <div class="form-group">
+            <label for="targetLanguage">Ngôn ngữ đích</label>
+            <input type="text" id="targetLanguage" name="targetLanguage" placeholder="vd: vi" />
+          </div>
+          <div class="form-group">
+            <label for="category">Chủ đề</label>
+            <input type="text" id="category" name="category" placeholder="vd: du lịch" />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Thêm từ vựng</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <form method="GET" action="/vocabulary" class="form-row" style="align-items: flex-end;">
+        <div class="form-group">
+          <label for="search">Tìm từ vựng</label>
+          <input type="text" id="search" name="search" value="<%= search %>" />
+        </div>
+        <div class="form-group">
+          <label for="category">Chủ đề</label>
+          <input type="text" id="category" name="category" value="<%= category %>" />
+        </div>
+        <button type="submit" class="btn btn-ghost">Tìm kiếm</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <% if (items.length === 0) { %>
+        <div class="empty-state">Chưa có từ vựng nào trong kho hệ thống</div>
+      <% } else { %>
+        <table>
+          <thead>
+            <tr><th>Từ</th><th>Nghĩa</th><th>Ngôn ngữ</th><th>Chủ đề</th><th>Hành động</th></tr>
+          </thead>
+          <tbody>
+            <% items.forEach(v => { %>
+              <tr>
+                <td><%= v.word %></td>
+                <td><%= v.meaning || '—' %></td>
+                <td class="mono"><%= v.sourceLanguage || '?' %> → <%= v.targetLanguage || '?' %></td>
+                <td><%= v.category || '—' %></td>
+                <td class="actions-cell">
+                  <form class="inline-form" method="POST" action="/vocabulary/<%= v._id %>/delete" onsubmit="return confirm('Xóa từ vựng này?');">
+                    <button type="submit" class="btn btn-danger btn-sm">Xóa</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="vi">
+<%- include('partials/head', { title: 'Tổng quan' }) %>
+<body>
+<div class="app-shell">
+  <%- include('partials/sidebar', { active: 'dashboard', admin: admin }) %>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Bảng điều khiển</div>
+        <h1>Tổng quan hệ thống</h1>
+      </div>
+    </div>
+
+    <div class="grid grid-4" style="margin-bottom: 24px;">
+      <div class="stat-card">
+        <div class="label">Tổng người dùng</div>
+        <div class="value"><%= userStats.total %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Đang hoạt động</div>
+        <div class="value teal"><%= userStats.activeCount %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Mới trong 7 ngày</div>
+        <div class="value gold">+<%= userStats.newLast7Days %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Mới trong 30 ngày</div>
+        <div class="value gold">+<%= userStats.newLast30Days %></div>
+      </div>
+    </div>
+
+    <div class="grid grid-4" style="margin-bottom: 24px;">
+      <div class="stat-card">
+        <div class="label">Từ vựng đã lưu</div>
+        <div class="value"><%= vocabStats.total %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Trong Flashcard</div>
+        <div class="value teal"><%= vocabStats.inFlashcardCount %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Lượt dịch (tổng)</div>
+        <div class="value"><%= vocabStats.totalTranslations %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Tài khoản admin</div>
+        <div class="value gold"><%= userStats.adminCount %></div>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="panel">
+        <h2>Top 10 từ vựng phổ biến</h2>
+        <% if (vocabStats.topWords.length === 0) { %>
+          <div class="empty-state">Chưa có dữ liệu từ vựng</div>
+        <% } else { %>
+          <table>
+            <thead><tr><th>Từ</th><th>Số lượt lưu</th></tr></thead>
+            <tbody>
+              <% vocabStats.topWords.forEach(w => { %>
+                <tr><td><%= w._id %></td><td class="mono"><%= w.count %></td></tr>
+              <% }) %>
+            </tbody>
+          </table>
+        <% } %>
+      </div>
+
+      <div class="panel">
+        <h2>Từ vựng theo ngôn ngữ đích</h2>
+        <% if (vocabStats.byTargetLanguage.length === 0) { %>
+          <div class="empty-state">Chưa có dữ liệu</div>
+        <% } else { %>
+          <table>
+            <thead><tr><th>Ngôn ngữ</th><th>Số từ</th></tr></thead>
+            <tbody>
+              <% vocabStats.byTargetLanguage.forEach(l => { %>
+                <tr><td><%= l._id || 'Không xác định' %></td><td class="mono"><%= l.count %></td></tr>
+              <% }) %>
+            </tbody>
+          </table>
+        <% } %>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

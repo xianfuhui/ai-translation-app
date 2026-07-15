@@ -1,0 +1,32 @@
+<aside class="sidebar">
+  <div class="brand">
+    <span class="brand-mark">語</span>
+    <div>
+      <div class="brand-name">LinguaAdmin</div>
+      <div class="brand-sub">Bảng điều khiển</div>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <a href="/dashboard" class="nav-item <%= active === 'dashboard' ? 'active' : '' %>">
+      <span class="nav-index">01</span> Tổng quan
+    </a>
+    <a href="/users" class="nav-item <%= active === 'users' ? 'active' : '' %>">
+      <span class="nav-index">02</span> Người dùng
+    </a>
+    <a href="/vocabulary" class="nav-item <%= active === 'vocabulary' ? 'active' : '' %>">
+      <span class="nav-index">03</span> Kho từ vựng
+    </a>
+    <a href="/history" class="nav-item <%= active === 'history' ? 'active' : '' %>">
+      <span class="nav-index">04</span> Lịch sử dịch
+    </a>
+    <a href="/languages" class="nav-item <%= active === 'languages' ? 'active' : '' %>">
+      <span class="nav-index">05</span> Ngôn ngữ
+    </a>
+  </nav>
+
+  <form action="/logout" method="POST" class="logout-form">
+    <span class="admin-email"><%= admin?.email %></span>
+    <button type="submit" class="btn-logout">Đăng xuất</button>
+  </form>
+</aside>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="vi">
+<%- include('../partials/head', { title: 'Người dùng' }) %>
+<body>
+<div class="app-shell">
+  <%- include('../partials/sidebar', { active: 'users', admin: admin }) %>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Quản lý tài khoản</div>
+        <h1>Người dùng</h1>
+      </div>
+    </div>
+
+    <div class="panel">
+      <form method="GET" action="/users" class="form-row" style="align-items: flex-end;">
+        <div class="form-group">
+          <label for="search">Tìm theo tên hoặc email</label>
+          <input type="text" id="search" name="search" value="<%= search %>" placeholder="vd: nguyen@gmail.com" />
+        </div>
+        <button type="submit" class="btn btn-ghost">Tìm kiếm</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <% if (users.length === 0) { %>
+        <div class="empty-state">Không tìm thấy người dùng nào</div>
+      <% } else { %>
+        <table>
+          <thead>
+            <tr>
+              <th>Họ tên</th><th>Email</th><th>Vai trò</th><th>Trạng thái</th><th>Ngày tạo</th><th>Hành động</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% users.forEach(u => { %>
+              <tr>
+                <td><%= u.fullName %></td>
+                <td><%= u.email %></td>
+                <td><span class="badge <%= u.role === 'admin' ? 'badge-admin' : 'badge-user' %>"><%= u.role %></span></td>
+                <td><span class="badge <%= u.isActive ? 'badge-active' : 'badge-inactive' %>"><%= u.isActive ? 'Hoạt động' : 'Đã khóa' %></span></td>
+                <td class="mono"><%= new Date(u.createdAt).toLocaleDateString('vi-VN') %></td>
+                <td class="actions-cell">
+                  <form class="inline-form" method="POST" action="/users/<%= u._id %>/update">
+                    <input type="hidden" name="role" value="<%= u.role === 'admin' ? 'user' : 'admin' %>" />
+                    <input type="hidden" name="isActive" value="<%= u.isActive %>" />
+                    <button type="submit" class="btn btn-ghost btn-sm"><%= u.role === 'admin' ? 'Hạ quyền' : 'Nâng admin' %></button>
+                  </form>
+                  <form class="inline-form" method="POST" action="/users/<%= u._id %>/update">
+                    <input type="hidden" name="role" value="<%= u.role %>" />
+                    <input type="hidden" name="isActive" value="<%= !u.isActive %>" />
+                    <button type="submit" class="btn btn-ghost btn-sm"><%= u.isActive ? 'Khóa' : 'Mở khóa' %></button>
+                  </form>
+                  <form class="inline-form" method="POST" action="/users/<%= u._id %>/delete" onsubmit="return confirm('Xóa tài khoản này?');">
+                    <button type="submit" class="btn btn-danger btn-sm">Xóa</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+
+        <div class="pagination">
+          <% for (let p = 1; p <= totalPages; p++) { %>
+            <a href="/users?page=<%= p %>&search=<%= search %>" class="<%= p == page ? 'active' : '' %>"><%= p %></a>
+          <% } %>
+        </div>
+      <% } %>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<%- include('../partials/head', { title: 'Ngôn ngữ' }) %>
+<body>
+<div class="app-shell">
+  <%- include('../partials/sidebar', { active: 'languages', admin: admin }) %>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Quản trị hệ thống</div>
+        <h1>Ngôn ngữ hỗ trợ</h1>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Thêm ngôn ngữ / model dịch mới</h2>
+      <form method="POST" action="/languages">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="code">Mã ngôn ngữ</label>
+            <input type="text" id="code" name="code" placeholder="vd: en" required />
+          </div>
+          <div class="form-group">
+            <label for="name">Tên hiển thị</label>
+            <input type="text" id="name" name="name" placeholder="vd: Tiếng Anh" required />
+          </div>
+          <div class="form-group">
+            <label for="translationModel">Model dịch</label>
+            <input type="text" id="translationModel" name="translationModel" placeholder="vd: opus-mt-en-vi" />
+          </div>
+          <div class="form-group">
+            <label for="voskModelName">Model Vosk (STT)</label>
+            <input type="text" id="voskModelName" name="voskModelName" placeholder="vd: vosk-model-en-us-0.22" />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Thêm ngôn ngữ</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <% if (items.length === 0) { %>
+        <div class="empty-state">Chưa có ngôn ngữ nào được cấu hình</div>
+      <% } else { %>
+        <table>
+          <thead>
+            <tr><th>Mã</th><th>Tên</th><th>Model dịch</th><th>Model Vosk</th><th>Trạng thái</th><th>Hành động</th></tr>
+          </thead>
+          <tbody>
+            <% items.forEach(l => { %>
+              <tr>
+                <td class="mono"><%= l.code %></td>
+                <td><%= l.name %></td>
+                <td class="mono"><%= l.translationModel || '—' %></td>
+                <td class="mono"><%= l.voskModelName || '—' %></td>
+                <td><span class="badge <%= l.isActive ? 'badge-active' : 'badge-inactive' %>"><%= l.isActive ? 'Hoạt động' : 'Tắt' %></span></td>
+                <td class="actions-cell">
+                  <form class="inline-form" method="POST" action="/languages/<%= l._id %>/update">
+                    <input type="hidden" name="code" value="<%= l.code %>" />
+                    <input type="hidden" name="name" value="<%= l.name %>" />
+                    <input type="hidden" name="translationModel" value="<%= l.translationModel || '' %>" />
+                    <input type="hidden" name="voskModelName" value="<%= l.voskModelName || '' %>" />
+                    <input type="hidden" name="isActive" value="<%= !l.isActive %>" />
+                    <button type="submit" class="btn btn-ghost btn-sm"><%= l.isActive ? 'Tắt' : 'Bật' %></button>
+                  </form>
+                  <form class="inline-form" method="POST" action="/languages/<%= l._id %>/delete" onsubmit="return confirm('Xóa ngôn ngữ này?');">
+                    <button type="submit" class="btn btn-danger btn-sm">Xóa</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  </main>
+</div>
+</body>
+</html>
