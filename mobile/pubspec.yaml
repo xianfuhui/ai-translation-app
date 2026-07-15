@@ -1,0 +1,45 @@
+name: language_app
+description: Ứng dụng Dịch ngôn ngữ & Học từ vựng (Mobile - Flutter)
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # Gọi API backend
+  http: ^1.2.1
+
+  # Lưu JWT token an toàn trên thiết bị
+  flutter_secure_storage: ^9.2.2
+
+  # Quản lý state
+  provider: ^6.1.2
+
+  # Định dạng ngày giờ
+  intl: ^0.19.0
+
+  # Text-to-Speech - dùng flutter_tts (wrapper cho iOS/Android TTS engine,
+  # tương đương mục đích với ML Kit trên Android)
+  flutter_tts: ^4.0.2
+
+  # Speech-to-Text offline (Vosk): CHƯA thêm ở đây vì gói `vosk_flutter` hiện
+  # yêu cầu http ^0.13.x, xung đột với http ^1.x đang dùng trong project.
+  # Khi tích hợp thật, thêm bằng lệnh:
+  #   flutter pub add vosk_flutter
+  # rồi kiểm tra `flutter pub get` xem có cần điều chỉnh version http không
+  # (xem README mục 5 - Tích hợp Vosk).
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
