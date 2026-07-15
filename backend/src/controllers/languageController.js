@@ -4,7 +4,9 @@ const Language = require('../models/Language');
 // @route   GET /api/languages
 const getLanguages = async (req, res, next) => {
   try {
-    const languages = await Language.find({ isActive: true }).sort({ name: 1 });
+    // Mobile chỉ cần ngôn ngữ đang hoạt động; Admin truyền ?all=true để thấy cả ngôn ngữ đã tắt
+    const filter = req.query.all === 'true' ? {} : { isActive: true };
+    const languages = await Language.find(filter).sort({ name: 1 });
     res.json(languages);
   } catch (error) {
     next(error);
