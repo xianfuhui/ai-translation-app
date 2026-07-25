@@ -24,7 +24,9 @@ backend/
 cd backend
 cp .env.example .env     # rồi điền MONGO_URI, JWT_SECRET, GEMINI_API_KEY...
 npm install
-npm run dev               # hoặc: npm start
+npm run seed:admin        # tạo tài khoản admin đầu tiên
+npm run seed:data         # (tùy chọn) tạo dữ liệu mẫu để kiểm thử
+npm run dev                # hoặc: npm start
 ```
 
 Yêu cầu: Node.js >= 18, MongoDB (local hoặc Atlas).
@@ -99,7 +101,26 @@ Vai trò (`role`): `user` (Mobile) hoặc `admin` (Web). Một số route chỉ 
 - Các chức năng offline (chọn ngôn ngữ đã tải, Vosk STT, ML Kit TTS) xử lý hoàn toàn trên thiết bị — chỉ đồng bộ danh mục ngôn ngữ + lưu lịch sử/từ vựng lên backend khi có mạng.
 - AI Assistant và tóm tắt hội thoại bắt buộc phải Online (gọi thẳng tới backend, backend proxy sang Gemini để giữ an toàn API key).
 
-## 6. Việc tiếp theo có thể làm
+## 6. Dữ liệu mẫu để kiểm thử
+
+```bash
+npm run seed:data
+```
+
+Script này tạo sẵn (an toàn chạy lại nhiều lần, tự xóa dữ liệu mẫu cũ trước khi tạo lại):
+
+| Loại dữ liệu | Nội dung |
+|---|---|
+| Ngôn ngữ | Tiếng Anh (en), Tiếng Việt (vi), Tiếng Nhật (ja) đang bật; Tiếng Hàn (ko) đang tắt để test trạng thái |
+| Tài khoản user | `user1@example.com` / `User@123`, `user2@example.com` / `User@123` |
+| Kho từ vựng hệ thống | 8 từ (en→vi, ja→vi), thuộc 3 chủ đề: giao tiếp, du lịch, công việc |
+| Từ vựng yêu thích | 3 từ cho `user1`, 2 từ đã thêm vào Flashcard |
+| Lịch sử dịch thuật | 3 bản ghi (2 của user1, 1 của user2), rải theo ngày để test lọc theo thời gian |
+| Hội thoại AI | 1 hội thoại mẫu 4 tin nhắn kèm bản tóm tắt cho `user1` |
+
+Dùng các tài khoản trên để đăng nhập test trên **Mobile App**; dùng tài khoản admin (từ `seed:admin`) để xem toàn bộ dữ liệu này trên **Web Admin**.
+
+## 7. Việc tiếp theo có thể làm
 
 - Viết Postman collection / OpenAPI spec để bạn test nhanh từng endpoint.
 - Dựng Flutter project khung (auth flow + gọi các API trên).
