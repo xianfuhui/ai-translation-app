@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../../models/language.dart';
@@ -16,6 +17,12 @@ import '../../services/vocabulary_service.dart';
 /// - Bản thân việc DỊCH văn bản cần một engine dịch offline (vd model dịch máy
 ///   nhúng theo `translationModel` của từng Language). Hàm `_translate()` bên
 ///   dưới là điểm nối (interface) để bạn cắm engine dịch thật vào.
+///
+/// CHẾ ĐỘ DỊCH TRỰC TIẾP:
+/// Nút "Dịch" hoạt động như 1 công tắc Bắt đầu/Dừng:
+/// - Bấm lần 1 (Bắt đầu): mở mic, liên tục nhận diện giọng nói (Vosk) và tự
+///   động dịch từng câu ngay khi nhận được, không cần bấm lại.
+/// - Bấm lần 2 (Dừng): tắt mic, dừng vòng lặp nhận diện + dịch.
 class TranslateScreen extends StatefulWidget {
   const TranslateScreen({super.key});
 
@@ -36,12 +43,17 @@ class _TranslateScreenState extends State<TranslateScreen> {
   String _translatedText = '';
   bool _loadingLanguages = true;
   bool _isTranslating = false;
-  bool _isListening = false;
+
+  // Trạng thái chế độ dịch trực tiếp (start/stop)
+  bool _isLiveTranslating = false;
+  StreamSubscription<String>? _liveSpeechSubscription;
 
   @override
-  void initState() {
-    super.initState();
-    _loadLanguages();
+  void dispose() {
+    _liveSpeechSubscription?.cancel();
+    _inputController.dispose();
+    _tts.stop();
+    super.dispose();
   }
 
   Future<void> _loadLanguages() async {
@@ -64,7 +76,14 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _loadLanguages();
+  }
+
   void _swapLanguages() {
+    if (_isLiveTranslating) return; // không đổi ngôn ngữ khi đang dịch trực tiếp
     setState(() {
       final tmp = _sourceLang;
       _sourceLang = _targetLang;
@@ -78,44 +97,40 @@ class _TranslateScreenState extends State<TranslateScreen> {
     return '[Bản dịch offline sẽ hiện ở đây] $text';
   }
 
-  Future<void> _handleTranslate() async {
+  /// Dịch 1 lần đoạn text hiện có trong ô nhập (dùng khi gõ tay, không ở chế độ trực tiếp)
+  Future<void> _handleTranslateOnce() async {
     final text = _inputController.text.trim();
     if (text.isEmpty || _sourceLang == null || _targetLang == null) return;
 
     setState(() => _isTranslating = true);
     try {
       final result = await _translate(text);
+      if (!mounted) return;
       setState(() => _translatedText = result);
-
-      // Lưu lịch sử (Online - best effort, không chặn UI nếu lỗi mạng)
-      _historyService
-          .createHistory(
-            sourceLanguage: _sourceLang!.code,
-            targetLanguage: _targetLang!.code,
-            sourceText: text,
-            translatedText: result,
-            type: 'text',
-          )
-          .catchError((_) {});
+      _saveToHistory(text, result);
     } finally {
       if (mounted) setState(() => _isTranslating = false);
     }
+  }
+
+  void _saveToHistory(String sourceText, String translatedText, {String type = 'text'}) {
+    if (_sourceLang == null || _targetLang == null) return;
+    // Lưu lịch sử (Online - best effort, không chặn UI nếu lỗi mạng)
+    _historyService
+        .createHistory(
+          sourceLanguage: _sourceLang!.code,
+          targetLanguage: _targetLang!.code,
+          sourceText: sourceText,
+          translatedText: translatedText,
+          type: type,
+        )
+        .catchError((_) {});
   }
 
   Future<void> _speak(String text, String? langCode) async {
     if (text.isEmpty) return;
     if (langCode != null) await _tts.setLanguage(langCode);
     await _tts.speak(text);
-  }
-
-  // TODO: Nối với vosk_flutter: khởi tạo recognizer bằng model theo
-  // `_sourceLang.voskModelName`, lắng nghe audio stream, đổ kết quả vào _inputController.
-  Future<void> _toggleListening() async {
-    setState(() => _isListening = !_isListening);
-    if (!_isListening) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang lắng nghe... (tích hợp Vosk tại đây)')),
-    );
   }
 
   Future<void> _saveWordAsVocabulary(String word) async {
@@ -132,6 +147,63 @@ class _TranslateScreenState extends State<TranslateScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lưu từ vựng thất bại: $e')));
     }
+  }
+
+  // ===== Chế độ dịch trực tiếp (Start / Stop) =====
+
+  Future<void> _toggleLiveTranslate() async {
+    if (_sourceLang == null || _targetLang == null) return;
+    if (_isLiveTranslating) {
+      await _stopLiveTranslate();
+    } else {
+      await _startLiveTranslate();
+    }
+  }
+
+  Future<void> _startLiveTranslate() async {
+    setState(() {
+      _isLiveTranslating = true;
+      _inputController.clear();
+      _translatedText = '';
+    });
+
+    // TODO: Nối với vosk_flutter tại đây:
+    // 1. Khởi tạo Recognizer bằng model theo `_sourceLang!.voskModelName`.
+    // 2. Mở stream audio từ mic, lắng nghe kết quả nhận diện (partial + final).
+    // 3. Với mỗi câu nhận diện HOÀN CHỈNH (final result), gọi `_onSpeechRecognized(text)`
+    //    bên dưới để tự động dịch ngay - không cần người dùng bấm gì thêm.
+    //
+    // Ví dụ minh họa luồng dữ liệu (thay bằng stream thật của Vosk):
+    // _liveSpeechSubscription = voskRecognizer.onResult.listen((recognizedText) {
+    //   _onSpeechRecognized(recognizedText);
+    // });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Đang dịch trực tiếp... (tích hợp Vosk tại đây)')),
+    );
+  }
+
+  Future<void> _stopLiveTranslate() async {
+    await _liveSpeechSubscription?.cancel();
+    _liveSpeechSubscription = null;
+    if (!mounted) return;
+    setState(() => _isLiveTranslating = false);
+  }
+
+  /// Được gọi mỗi khi nhận diện được 1 câu hoàn chỉnh trong lúc dịch trực tiếp.
+  /// Tự động dịch ngay và cập nhật kết quả, không cần thao tác thêm.
+  Future<void> _onSpeechRecognized(String recognizedText) async {
+    if (recognizedText.trim().isEmpty) return;
+    setState(() => _inputController.text = recognizedText);
+
+    final result = await _translate(recognizedText);
+    if (!mounted) return;
+    setState(() => _translatedText = result);
+    _saveToHistory(recognizedText, result, type: 'speech');
+
+    // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
+    _speak(result, _targetLang?.code);
   }
 
   @override
@@ -151,6 +223,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
               const SizedBox(height: 16),
               _buildInputCard(),
               const SizedBox(height: 16),
+              _buildLiveTranslateButton(),
+              const SizedBox(height: 16),
               if (_translatedText.isNotEmpty) _buildResultCard(),
             ],
           ),
@@ -163,7 +237,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     return Row(
       children: [
         Expanded(child: _languageDropdown(_sourceLang, (v) => setState(() => _sourceLang = v))),
-        IconButton(icon: const Icon(Icons.swap_horiz), onPressed: _swapLanguages),
+        IconButton(icon: const Icon(Icons.swap_horiz), onPressed: _isLiveTranslating ? null : _swapLanguages),
         Expanded(child: _languageDropdown(_targetLang, (v) => setState(() => _targetLang = v))),
       ],
     );
@@ -175,7 +249,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       isExpanded: true,
       decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12)),
       items: _languages.map((l) => DropdownMenuItem(value: l, child: Text(l.name, overflow: TextOverflow.ellipsis))).toList(),
-      onChanged: onChanged,
+      onChanged: _isLiveTranslating ? null : onChanged,
     );
   }
 
@@ -189,28 +263,45 @@ class _TranslateScreenState extends State<TranslateScreen> {
             TextField(
               controller: _inputController,
               maxLines: 4,
-              decoration: const InputDecoration(hintText: 'Nhập văn bản cần dịch...', border: InputBorder.none),
+              readOnly: _isLiveTranslating, // đang dịch trực tiếp thì text được đổ vào tự động từ mic
+              decoration: InputDecoration(
+                hintText: _isLiveTranslating ? 'Đang nghe...' : 'Nhập văn bản cần dịch, hoặc bấm Dịch để nói',
+                border: InputBorder.none,
+              ),
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: Icon(_isListening ? Icons.mic : Icons.mic_none),
-                  color: _isListening ? Colors.red : null,
-                  onPressed: _toggleListening,
-                  tooltip: 'Chuyển giọng nói thành văn bản',
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: _isTranslating ? null : _handleTranslate,
-                  icon: _isTranslating
-                      ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.translate, size: 18),
-                  label: const Text('Dịch'),
-                ),
-              ],
-            ),
+            if (!_isLiveTranslating)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: _isTranslating ? null : _handleTranslateOnce,
+                    icon: _isTranslating
+                        ? const SizedBox(height: 14, width: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.text_fields, size: 16),
+                    label: const Text('Dịch văn bản đã gõ'),
+                  ),
+                ],
+              ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Nút chính: Bắt đầu / Dừng dịch trực tiếp bằng giọng nói.
+  Widget _buildLiveTranslateButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: FilledButton.icon(
+        onPressed: _toggleLiveTranslate,
+        style: FilledButton.styleFrom(
+          backgroundColor: _isLiveTranslating ? Theme.of(context).colorScheme.error : null,
+        ),
+        icon: Icon(_isLiveTranslating ? Icons.stop_circle_outlined : Icons.mic, size: 22),
+        label: Text(
+          _isLiveTranslating ? 'Dừng dịch trực tiếp' : 'Dịch',
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -228,7 +319,15 @@ class _TranslateScreenState extends State<TranslateScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Kết quả', style: TextStyle(fontWeight: FontWeight.w600)),
+                  Row(
+                    children: [
+                      const Text('Kết quả', style: TextStyle(fontWeight: FontWeight.w600)),
+                      if (_isLiveTranslating) ...[
+                        const SizedBox(width: 8),
+                        _buildLiveDot(),
+                      ],
+                    ],
+                  ),
                   IconButton(
                     icon: const Icon(Icons.volume_up_outlined),
                     onPressed: () => _speak(_translatedText, _targetLang?.code),
@@ -262,6 +361,14 @@ class _TranslateScreenState extends State<TranslateScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildLiveDot() {
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: Theme.of(context).colorScheme.error, shape: BoxShape.circle),
     );
   }
 }
