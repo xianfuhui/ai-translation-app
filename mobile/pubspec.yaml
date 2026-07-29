@@ -30,12 +30,10 @@ dependencies:
   # Dịch offline bằng Google ML Kit Translation (tự tải model ngôn ngữ về máy khi cần)
   google_mlkit_translation: ^0.13.0
 
-  # Speech-to-Text offline (Vosk): CHƯA thêm ở đây vì gói `vosk_flutter` hiện
-  # yêu cầu http ^0.13.x, xung đột với http ^1.x đang dùng trong project.
-  # Khi tích hợp thật, thêm bằng lệnh:
-  #   flutter pub add vosk_flutter
-  # rồi kiểm tra `flutter pub get` xem có cần điều chỉnh version http không
-  # (xem README mục 5 - Tích hợp Vosk).
+  # Speech-to-Text offline (Vosk) - bản chính chủ alphacep, đã hỗ trợ http ^1.x nên
+  # không còn xung đột version như các bản cũ.
+  vosk_flutter: ^0.4.0
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

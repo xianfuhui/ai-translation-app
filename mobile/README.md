@@ -54,7 +54,7 @@ lib/
 |---|---|
 | Đăng ký / Đăng nhập / Đăng xuất / Đổi mật khẩu | ✅ Hoạt động đầy đủ, gọi thẳng API backend |
 | Chọn ngôn ngữ | ✅ Lấy danh sách từ API, hiển thị dropdown |
-| Speech-to-Text (Vosk) | 🚧 Có nút mic + điểm nối `_toggleListening()`, cần tích hợp gói `vosk_flutter` thật (xem mục 5) |
+| Speech-to-Text (Vosk) | ✅ Đã tích hợp thật bằng `vosk_flutter` — ghi âm mic, nhận diện offline, tự tải model theo cấu hình Admin (xem mục 5) |
 | Text-to-Speech | ✅ Đã tích hợp `flutter_tts`, hoạt động ngay (dùng engine TTS hệ thống) |
 | Dịch văn bản | ✅ Dịch offline thật bằng Google ML Kit Translation (`google_mlkit_translation`), tự tải model theo cấu hình Admin (xem mục 6) |
 | AI Assistant (chat + tóm tắt) | ✅ Hoạt động đầy đủ, gọi Gemini qua backend |
@@ -63,23 +63,38 @@ lib/
 | Flashcard (kèm audio phát âm) | ✅ Lật thẻ xem nghĩa, phát âm bằng TTS; audio từ điển online lấy tự động khi lưu từ (xử lý ở backend) |
 | Lịch sử dịch thuật | ✅ Xem, vuốt để xóa |
 
-## 5. Tích hợp Vosk (Speech-to-Text offline) — bước tiếp theo
+## 5. Speech-to-Text bằng Vosk — đã tích hợp thật
 
-Gói `vosk_flutter` **chưa được thêm sẵn** vào `pubspec.yaml` vì bản hiện tại của nó yêu cầu `http ^0.13.x`, xung đột với `http ^1.x` mà project đang dùng để gọi backend. Khi bạn sẵn sàng tích hợp:
+`lib/services/vosk_service.dart` dùng gói chính chủ **`vosk_flutter`** (alphacep/vosk-flutter) — bản hiện tại đã hỗ trợ `http ^1.x`, không còn xung đột version như các bản cũ.
 
-1. Thử thêm gói:
-   ```bash
-   flutter pub add vosk_flutter
+**Luồng hoạt động khi bấm nút "Dịch":**
+1. App hỏi backend model Vosk nào đang active cho ngôn ngữ nguồn (`ModelService().getActiveVoskModel()`), ưu tiên dùng file thật Admin đã upload (`getDownloadUrl()`).
+2. `VoskService.loadModel(url)` tự tải (nếu cần) + giải nén + nạp model — có banner "Đang tải model dịch..." trong lúc chờ, chỉ tải 1 lần.
+3. App xin quyền micro (`permission_handler`), rồi `VoskService.startListening()` mở mic nghe liên tục.
+4. Mỗi khi Vosk nhận diện xong 1 câu hoàn chỉnh, `_onSpeechRecognized()` được gọi để tự động dịch ngay bằng ML Kit — không cần thao tác gì thêm.
+5. Bấm "Dừng" → `stopListening()` tắt mic (model vẫn giữ trong bộ nhớ, lần sau bấm lại không cần tải lại).
+
+**⚠️ Bạn cần tự thêm 2 việc sau (bắt buộc, không thể làm thay ở môi trường soạn code):**
+
+1. **Quyền microphone** — sau khi chạy `flutter create .`, mở `android/app/src/main/AndroidManifest.xml`, thêm trước thẻ `<application>`:
+   ```xml
+   <uses-permission android:name="android.permission.RECORD_AUDIO" />
    ```
-   - Nếu báo xung đột version `http` như trên, kiểm tra xem `vosk_flutter` đã có bản mới hỗ trợ `http ^1.x` chưa (xem https://pub.dev/packages/vosk_flutter/versions). Gói STT offline thường cập nhật chậm hơn.
-   - Nếu chưa có, cân nhắc 2 hướng: (a) hạ `http` xuống `^0.13.6` (API gần tương tự `http ^1.x`, chỉ cần sửa vài chỗ nếu có lỗi), hoặc (b) dùng gói STT offline khác đang được bảo trì tốt hơn (tìm "speech to text offline" trên pub.dev).
-2. Lấy model Vosk cho ngôn ngữ cần dùng — **ưu tiên tải trực tiếp từ backend** nếu Admin đã upload file (xem mục 7):
-   ```dart
-   final voskModel = await ModelService().getActiveVoskModel(languageCode);
-   final downloadUrl = ModelService().getDownloadUrl(voskModel!); // link file .zip thật trên backend, hoặc link ngoài nếu Admin chưa upload
+   Trên iOS, mở `ios/Runner/Info.plist`, thêm:
+   ```xml
+   <key>NSMicrophoneUsageDescription</key>
+   <string>Ứng dụng cần quyền micro để nhận diện giọng nói</string>
    ```
-3. Tải file `.zip` về máy (dùng `http`/`dio`), giải nén vào thư mục local (vd `path_provider` + `archive` package để giải nén).
-4. Trong `_startLiveTranslate()` (file `translate_screen.dart`), khởi tạo plugin STT với model đã giải nén, lắng nghe audio stream, và gọi `_onSpeechRecognized(text)` mỗi khi nhận diện xong 1 câu — chỗ này đã viết sẵn, chỉ cần nối vào.
+
+2. **Proguard rule (chỉ Android, bắt buộc để build release không lỗi)** — tạo/mở `android/app/proguard-rules.pro`, thêm:
+   ```
+   -keep class com.sun.jna.* { *; }
+   -keepclassmembers class * extends com.sun.jna.* { public *; }
+   ```
+
+Sau khi thêm 2 mục trên, chạy `flutter pub get` rồi `flutter run` — nút "Dịch" sẽ ghi âm và nhận diện giọng nói thật (yêu cầu test trên máy thật/emulator có mic hoạt động).
+
+> Nếu `flutter pub get` báo lỗi version cho `vosk_flutter: ^0.4.0` (số phiên bản mình ghi trong `pubspec.yaml` có thể đã lỗi thời), chạy `flutter pub add vosk_flutter` để tự động điền đúng version mới nhất hiện có.
 
 ## 6. Dịch offline bằng ML Kit — đã tích hợp sẵn
 
@@ -112,7 +127,6 @@ Admin quản lý toàn bộ danh sách model qua Web Admin → **Model (Vosk/ML 
 
 ## 8. Việc tiếp theo có thể làm
 
-- Hoàn thiện tích hợp Vosk như hướng dẫn ở mục 5, dùng `ModelService.getActiveVoskModel()` để lấy `identifier`/`downloadUrl` Admin đã cấu hình.
-- Thêm màn hình trong app cho người dùng tự quản lý model đã tải (xem dung lượng, xóa model không dùng) bằng `TranslationService.deleteModel()`.
+- Thêm màn hình trong app cho người dùng tự quản lý model Vosk đã tải (xem dung lượng, xóa model không dùng qua `TranslationService.deleteModel()` cho ML Kit; với Vosk cần tự thêm hàm xóa cache model trong `VoskService`).
 - Thêm cache offline (Hive/SQLite) để xem lại lịch sử/từ vựng khi mất mạng.
 - Thêm animation chuyển màn hình, dark mode.

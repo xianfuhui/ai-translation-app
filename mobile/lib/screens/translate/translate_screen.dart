@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../../models/language.dart';
@@ -7,13 +6,15 @@ import '../../services/history_service.dart';
 import '../../services/vocabulary_service.dart';
 import '../../services/translation_service.dart';
 import '../../services/model_service.dart';
+import '../../services/vosk_service.dart';
 
 /// Màn hình Dịch ngôn ngữ.
 ///
 /// LƯU Ý VỀ OFFLINE:
 /// - Danh sách ngôn ngữ tải 1 lần từ backend rồi cache lại để dùng offline.
-/// - Speech-to-Text dùng gói `vosk_flutter` (model tải sẵn về máy - xem README
-///   phần "Tích hợp Vosk" để biết cách lấy model qua `ModelService`).
+/// - Speech-to-Text dùng gói `vosk_flutter` (chính chủ alphacep) — ghi âm mic
+///   thật, tự tải model theo cấu hình Admin qua `ModelService`, nhận diện
+///   offline hoàn toàn (xem `VoskService`).
 /// - Text-to-Speech dùng `flutter_tts` (dùng engine TTS hệ thống, tương đương
 ///   mục tiêu của ML Kit trên Android).
 /// - DỊCH văn bản dùng Google ML Kit Translation (`google_mlkit_translation`),
@@ -24,9 +25,11 @@ import '../../services/model_service.dart';
 ///
 /// CHẾ ĐỘ DỊCH TRỰC TIẾP:
 /// Nút "Dịch" hoạt động như 1 công tắc Bắt đầu/Dừng:
-/// - Bấm lần 1 (Bắt đầu): mở mic, liên tục nhận diện giọng nói (Vosk) và tự
-///   động dịch từng câu ngay khi nhận được, không cần bấm lại.
-/// - Bấm lần 2 (Dừng): tắt mic, dừng vòng lặp nhận diện + dịch.
+/// - Bấm lần 1 (Bắt đầu): xin quyền mic, tải/nạp model Vosk theo ngôn ngữ
+///   nguồn (cấu hình ở Web Admin → Ngôn ngữ & Model), rồi mở mic nghe liên
+///   tục — mỗi khi nhận diện xong 1 câu, tự động dịch ngay bằng ML Kit.
+/// - Bấm lần 2 (Dừng): tắt mic, dừng vòng lặp nhận diện + dịch (model Vosk
+///   vẫn giữ trong bộ nhớ nên lần Bắt đầu sau không cần tải lại).
 class TranslateScreen extends StatefulWidget {
   const TranslateScreen({super.key});
 
@@ -40,6 +43,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   final _vocabularyService = VocabularyService();
   final _modelService = ModelService();
   final _translationService = TranslationService();
+  final _voskService = VoskService();
   final _tts = FlutterTts();
   final _inputController = TextEditingController();
 
@@ -49,18 +53,17 @@ class _TranslateScreenState extends State<TranslateScreen> {
   String _translatedText = '';
   bool _loadingLanguages = true;
   bool _isTranslating = false;
-  String? _downloadingModelLabel; // hiện khi đang tải model ML Kit lần đầu
+  String? _downloadingModelLabel; // hiện khi đang tải model ML Kit / Vosk lần đầu
 
   // Trạng thái chế độ dịch trực tiếp (start/stop)
   bool _isLiveTranslating = false;
-  StreamSubscription<String>? _liveSpeechSubscription;
 
   @override
   void dispose() {
-    _liveSpeechSubscription?.cancel();
     _inputController.dispose();
     _tts.stop();
     _translationService.dispose();
+    _voskService.dispose();
     super.dispose();
   }
 
@@ -209,32 +212,52 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Future<void> _startLiveTranslate() async {
+    if (_sourceLang == null) return;
+
     setState(() {
       _isLiveTranslating = true;
       _inputController.clear();
       _translatedText = '';
     });
 
-    // TODO: Nối với vosk_flutter tại đây:
-    // 1. Khởi tạo Recognizer bằng model lấy từ `ModelService().getActiveVoskModel(_sourceLang!.code)`.
-    // 2. Mở stream audio từ mic, lắng nghe kết quả nhận diện (partial + final).
-    // 3. Với mỗi câu nhận diện HOÀN CHỈNH (final result), gọi `_onSpeechRecognized(text)`
-    //    bên dưới để tự động dịch ngay - không cần người dùng bấm gì thêm.
-    //
-    // Ví dụ minh họa luồng dữ liệu (thay bằng stream thật của Vosk):
-    // _liveSpeechSubscription = voskRecognizer.onResult.listen((recognizedText) {
-    //   _onSpeechRecognized(recognizedText);
-    // });
+    try {
+      // 1. Lấy model Vosk Admin đã cấu hình cho ngôn ngữ nguồn (kể cả file upload thật hoặc link ngoài)
+      final voskModel = await _modelService.getActiveVoskModel(_sourceLang!.code);
+      if (voskModel == null) {
+        throw Exception(
+          'Chưa có model Vosk nào được cấu hình cho "${_sourceLang!.name}" (thêm ở Web Admin → Ngôn ngữ & Model)',
+        );
+      }
+      final modelUrl = _modelService.getDownloadUrl(voskModel);
+      if (modelUrl == null || modelUrl.isEmpty) {
+        throw Exception('Model Vosk "${voskModel.name}" chưa có file hoặc link tải hợp lệ');
+      }
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Đang dịch trực tiếp... (tích hợp Vosk tại đây)')),
-    );
+      // 2. Tải (nếu cần) + nạp model - có thể mất vài giây/phút lần đầu tùy dung lượng
+      if (mounted) setState(() => _downloadingModelLabel = voskModel.name);
+      await _voskService.loadModel(modelUrl);
+      if (mounted) setState(() => _downloadingModelLabel = null);
+
+      // 3. Bắt đầu nghe mic thật, tự động dịch mỗi khi nhận diện xong 1 câu
+      await _voskService.startListening(
+        onPartial: (partialText) {
+          if (mounted) setState(() => _inputController.text = partialText);
+        },
+        onResult: (finalText) => _onSpeechRecognized(finalText),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLiveTranslating = false;
+          _downloadingModelLabel = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không thể bắt đầu dịch trực tiếp: $e')));
+      }
+    }
   }
 
   Future<void> _stopLiveTranslate() async {
-    await _liveSpeechSubscription?.cancel();
-    _liveSpeechSubscription = null;
+    await _voskService.stopListening();
     if (!mounted) return;
     setState(() => _isLiveTranslating = false);
   }
