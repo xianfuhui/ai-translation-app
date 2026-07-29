@@ -59,7 +59,7 @@ Vai trò (`role`): `user` (Mobile) hoặc `admin` (Web). Một số route chỉ 
 |---|---|---|---|
 | GET | /api/languages | Mobile | Danh sách ngôn ngữ hỗ trợ để chọn dịch |
 
-> Chọn ngôn ngữ, Speech-to-Text (Vosk), Text-to-Speech (ML Kit) chạy **offline trên thiết bị**, backend chỉ cung cấp cấu hình model (`voskModelName`, `translationModel`) qua API ngôn ngữ ở trên.
+> Chọn ngôn ngữ, Speech-to-Text (Vosk), Text-to-Speech (ML Kit) chạy **offline trên thiết bị**, backend chỉ cung cấp cấu hình model qua API `/api/models` (xem mục 6), quản lý ngay trong Web Admin → trang **Ngôn ngữ & Model**.
 
 ### AI Assistant (Gemini)
 | Method | Endpoint | Ai dùng | Mô tả |
@@ -93,7 +93,9 @@ Vai trò (`role`): `user` (Mobile) hoặc `admin` (Web). Một số route chỉ 
 |---|---|---|---|
 | GET | /api/stats/users | Admin | Thống kê người dùng |
 | GET | /api/stats/vocabulary | Admin | Thống kê từ vựng được lưu |
-| POST/PUT/DELETE | /api/languages | Admin | Quản lý ngôn ngữ / model dịch hỗ trợ |
+| POST/PUT/DELETE | /api/languages | Admin | Quản lý ngôn ngữ hỗ trợ |
+| GET | /api/models | Mobile + Admin | Danh sách model Vosk (STT) / ML Kit (dịch) khả dụng |
+| POST/PUT/DELETE | /api/models/:id | Admin | Thêm/sửa/xóa model Vosk hoặc ML Kit |
 
 ## 5. Ghi chú tích hợp Flutter
 
@@ -101,7 +103,17 @@ Vai trò (`role`): `user` (Mobile) hoặc `admin` (Web). Một số route chỉ 
 - Các chức năng offline (chọn ngôn ngữ đã tải, Vosk STT, ML Kit TTS) xử lý hoàn toàn trên thiết bị — chỉ đồng bộ danh mục ngôn ngữ + lưu lịch sử/từ vựng lên backend khi có mạng.
 - AI Assistant và tóm tắt hội thoại bắt buộc phải Online (gọi thẳng tới backend, backend proxy sang Gemini để giữ an toàn API key).
 
-## 6. Dữ liệu mẫu để kiểm thử
+## 6. Upload file model (Vosk/ML Kit)
+
+Endpoint `POST/PUT /api/models` chấp nhận `multipart/form-data` với field file tên **`modelFile`** (tùy chọn, kèm các field text khác như `type`, `name`, `languageCode`, `identifier`...). File được lưu tại `backend/uploads/models/` và phục vụ tĩnh qua `/uploads/models/<tên file>`.
+
+- Giới hạn dung lượng mặc định: **800MB** (model Vosk đầy đủ có thể khá lớn) — chỉnh qua biến môi trường `MAX_MODEL_UPLOAD_MB` trong `.env`.
+- Khi xóa model hoặc thay file mới, backend **tự động xóa file cũ** trên đĩa để không rác dung lượng.
+- Response trả về thêm trường `fileUrl` (đường dẫn tương đối) khi model có file — client (Mobile/Web Admin) tự ghép với domain backend để tải.
+
+> **Lưu ý:** ML Kit Translation không hỗ trợ nạp model tùy chỉnh — file upload cho loại `mlkit` chỉ để lưu trữ/tham khảo, bản thân tính năng dịch trong Mobile App luôn dùng model chính chủ Google (tự tải theo mã ngôn ngữ). File upload cho loại `vosk` thì được Mobile App dùng thật (tải trực tiếp từ backend).
+
+## 7. Dữ liệu mẫu để kiểm thử
 
 ```bash
 npm run seed:data
@@ -117,10 +129,11 @@ Script này tạo sẵn (an toàn chạy lại nhiều lần, tự xóa dữ li�
 | Từ vựng yêu thích | 3 từ cho `user1`, 2 từ đã thêm vào Flashcard |
 | Lịch sử dịch thuật | 3 bản ghi (2 của user1, 1 của user2), rải theo ngày để test lọc theo thời gian |
 | Hội thoại AI | 1 hội thoại mẫu 4 tin nhắn kèm bản tóm tắt cho `user1` |
+| Kho model | 3 model Vosk (en/vi/ja) + 3 model ML Kit (en/vi/ja), đều đang bật |
 
 Dùng các tài khoản trên để đăng nhập test trên **Mobile App**; dùng tài khoản admin (từ `seed:admin`) để xem toàn bộ dữ liệu này trên **Web Admin**.
 
-## 7. Việc tiếp theo có thể làm
+## 8. Việc tiếp theo có thể làm
 
 - Viết Postman collection / OpenAPI spec để bạn test nhanh từng endpoint.
 - Dựng Flutter project khung (auth flow + gọi các API trên).

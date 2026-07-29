@@ -9,6 +9,7 @@ const Vocabulary = require('../src/models/Vocabulary');
 const SystemVocabulary = require('../src/models/SystemVocabulary');
 const TranslationHistory = require('../src/models/TranslationHistory');
 const AIConversation = require('../src/models/AIConversation');
+const Model = require('../src/models/Model');
 
 const DEMO_USER_EMAILS = ['user1@example.com', 'user2@example.com'];
 
@@ -18,10 +19,10 @@ async function run() {
 
   // ===== 1. Ngôn ngữ hỗ trợ =====
   const languageData = [
-    { code: 'en', name: 'Tiếng Anh', translationModel: 'opus-mt-en-vi', voskModelName: 'vosk-model-small-en-us-0.15', isActive: true },
-    { code: 'vi', name: 'Tiếng Việt', translationModel: 'opus-mt-vi-en', voskModelName: 'vosk-model-vn-0.4', isActive: true },
-    { code: 'ja', name: 'Tiếng Nhật', translationModel: 'opus-mt-ja-vi', voskModelName: 'vosk-model-small-ja-0.22', isActive: true },
-    { code: 'ko', name: 'Tiếng Hàn', translationModel: 'opus-mt-ko-vi', voskModelName: 'vosk-model-small-ko-0.22', isActive: false },
+    { code: 'en', name: 'Tiếng Anh', isActive: true },
+    { code: 'vi', name: 'Tiếng Việt', isActive: true },
+    { code: 'ja', name: 'Tiếng Nhật', isActive: true },
+    { code: 'ko', name: 'Tiếng Hàn', isActive: false },
   ];
   await Language.deleteMany({ code: { $in: languageData.map((l) => l.code) } });
   const languages = await Language.insertMany(languageData);
@@ -111,6 +112,21 @@ async function run() {
     summary: 'Luyện hội thoại gọi món tại nhà hàng bằng tiếng Anh, có giải thích nghĩa câu.',
   });
   console.log(`✅ Đã tạo 1 hội thoại AI mẫu cho ${user1.email}`);
+
+  // ===== 7. Kho model Vosk (STT) + ML Kit (dịch) =====
+  const modelData = [
+    // Vosk - Speech to Text
+    { type: 'vosk', name: 'Vosk English Small', languageCode: 'en', identifier: 'vosk-model-small-en-us-0.15', downloadUrl: 'https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip', sizeMB: 40, description: 'Nhẹ, phù hợp mobile', isActive: true },
+    { type: 'vosk', name: 'Vosk Vietnamese', languageCode: 'vi', identifier: 'vosk-model-vn-0.4', downloadUrl: 'https://alphacephei.com/vosk/models/vosk-model-vn-0.4.zip', sizeMB: 32, description: 'Model tiếng Việt cộng đồng', isActive: true },
+    { type: 'vosk', name: 'Vosk Japanese Small', languageCode: 'ja', identifier: 'vosk-model-small-ja-0.22', downloadUrl: 'https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip', sizeMB: 48, description: 'Nhẹ, phù hợp mobile', isActive: true },
+    // ML Kit - Dịch offline (identifier = mã ngôn ngữ ML Kit dùng để dịch)
+    { type: 'mlkit', name: 'ML Kit English', languageCode: 'en', identifier: 'en', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
+    { type: 'mlkit', name: 'ML Kit Vietnamese', languageCode: 'vi', identifier: 'vi', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
+    { type: 'mlkit', name: 'ML Kit Japanese', languageCode: 'ja', identifier: 'ja', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
+  ];
+  await Model.deleteMany({ identifier: { $in: modelData.map((m) => m.identifier) } });
+  const models = await Model.insertMany(modelData);
+  console.log(`✅ Đã tạo ${models.length} model (Vosk + ML Kit)`);
 
   console.log('\n🎉 Seed dữ liệu mẫu hoàn tất!\n');
   console.log('----- TÀI KHOẢN KIỂM THỬ -----');

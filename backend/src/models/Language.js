@@ -4,10 +4,10 @@ const languageSchema = new mongoose.Schema(
   {
     code: { type: String, required: true, unique: true, trim: true }, // vd: "en", "vi", "ja"
     name: { type: String, required: true, trim: true }, // vd: "Tiếng Anh"
-    // Model/engine dịch dùng cho ngôn ngữ này (offline model name, vd Vosk model, hoặc engine dịch)
-    translationModel: { type: String, trim: true },
-    voskModelName: { type: String, trim: true }, // model Vosk cho speech-to-text
     isActive: { type: Boolean, default: true },
+    // Model Vosk (STT) và ML Kit (dịch) cho ngôn ngữ này được quản lý riêng
+    // trong collection `Model` (lọc theo `languageCode` = `code` ở đây),
+    // xem src/controllers/modelController.js
   },
   { timestamps: true }
 );

@@ -118,6 +118,8 @@ tr:hover td { background: var(--teal-soft); }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }
 .badge-admin { background: var(--gold-soft); color: var(--gold); }
 .badge-user { background: var(--teal-soft); color: var(--teal); }
+.badge-gold { background: var(--gold-soft); color: var(--gold); }
+.badge-teal { background: var(--teal-soft); color: var(--teal); }
 .badge-active { background: var(--teal-soft); color: var(--teal); }
 .badge-inactive { background: #F4E4E0; color: var(--danger); }
 

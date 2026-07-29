@@ -5,18 +5,22 @@ import '../../models/language.dart';
 import '../../services/language_service.dart';
 import '../../services/history_service.dart';
 import '../../services/vocabulary_service.dart';
+import '../../services/translation_service.dart';
+import '../../services/model_service.dart';
 
 /// Màn hình Dịch ngôn ngữ.
 ///
 /// LƯU Ý VỀ OFFLINE:
 /// - Danh sách ngôn ngữ tải 1 lần từ backend rồi cache lại để dùng offline.
 /// - Speech-to-Text dùng gói `vosk_flutter` (model tải sẵn về máy - xem README
-///   phần "Tích hợp Vosk" để biết cách nạp model theo `voskModelName`).
+///   phần "Tích hợp Vosk" để biết cách lấy model qua `ModelService`).
 /// - Text-to-Speech dùng `flutter_tts` (dùng engine TTS hệ thống, tương đương
 ///   mục tiêu của ML Kit trên Android).
-/// - Bản thân việc DỊCH văn bản cần một engine dịch offline (vd model dịch máy
-///   nhúng theo `translationModel` của từng Language). Hàm `_translate()` bên
-///   dưới là điểm nối (interface) để bạn cắm engine dịch thật vào.
+/// - DỊCH văn bản dùng Google ML Kit Translation (`google_mlkit_translation`),
+///   chạy hoàn toàn offline sau khi model ngôn ngữ được tải về máy lần đầu.
+///   Mã ngôn ngữ dùng để dịch lấy từ kho Model (`type: "mlkit"`) do Admin cấu
+///   hình trong Web Admin → Model (Vosk/ML Kit); nếu Admin chưa cấu hình,
+///   dùng tạm mã ngôn ngữ (`Language.code`) làm mặc định.
 ///
 /// CHẾ ĐỘ DỊCH TRỰC TIẾP:
 /// Nút "Dịch" hoạt động như 1 công tắc Bắt đầu/Dừng:
@@ -34,6 +38,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
   final _languageService = LanguageService();
   final _historyService = HistoryService();
   final _vocabularyService = VocabularyService();
+  final _modelService = ModelService();
+  final _translationService = TranslationService();
   final _tts = FlutterTts();
   final _inputController = TextEditingController();
 
@@ -43,6 +49,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   String _translatedText = '';
   bool _loadingLanguages = true;
   bool _isTranslating = false;
+  String? _downloadingModelLabel; // hiện khi đang tải model ML Kit lần đầu
 
   // Trạng thái chế độ dịch trực tiếp (start/stop)
   bool _isLiveTranslating = false;
@@ -53,6 +60,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _liveSpeechSubscription?.cancel();
     _inputController.dispose();
     _tts.stop();
+    _translationService.dispose();
     super.dispose();
   }
 
@@ -91,10 +99,47 @@ class _TranslateScreenState extends State<TranslateScreen> {
     });
   }
 
-  // TODO: Thay bằng lời gọi engine dịch offline thật (theo `_sourceLang.translationModel`).
+  /// Lấy mã ngôn ngữ dùng để dịch bằng ML Kit: ưu tiên `identifier` của model
+  /// loại "mlkit" mà Admin đã cấu hình cho ngôn ngữ này; nếu chưa cấu hình,
+  /// dùng tạm mã ngôn ngữ (`Language.code`) làm mặc định.
+  Future<String> _resolveMlkitCode(String languageCode) async {
+    try {
+      final model = await _modelService.getActiveMlkitModel(languageCode);
+      if (model != null) return model.identifier;
+    } catch (_) {
+      // Không lấy được cấu hình từ backend (vd mất mạng) - dùng mặc định bên dưới
+    }
+    return languageCode;
+  }
+
+  /// Đảm bảo model dịch của 1 ngôn ngữ đã có sẵn trên máy, tự tải nếu chưa có
+  /// (chỉ tải 1 lần, các lần dịch sau dùng lại model đã tải).
+  Future<void> _ensureModelDownloaded(String mlkitCode, String displayName) async {
+    if (!_translationService.isSupported(mlkitCode)) {
+      throw Exception('ML Kit chưa hỗ trợ ngôn ngữ "$mlkitCode" (cấu hình lại ở Web Admin → Model)');
+    }
+    final downloaded = await _translationService.isModelDownloaded(mlkitCode);
+    if (downloaded) return;
+
+    if (mounted) setState(() => _downloadingModelLabel = displayName);
+    try {
+      await _translationService.downloadModel(mlkitCode);
+    } finally {
+      if (mounted) setState(() => _downloadingModelLabel = null);
+    }
+  }
+
+  /// Dịch văn bản offline bằng ML Kit, tự tải model ngôn ngữ nếu máy chưa có.
   Future<String> _translate(String text) async {
-    await Future.delayed(const Duration(milliseconds: 400));
-    return '[Bản dịch offline sẽ hiện ở đây] $text';
+    if (_sourceLang == null || _targetLang == null) return text;
+
+    final sourceCode = await _resolveMlkitCode(_sourceLang!.code);
+    final targetCode = await _resolveMlkitCode(_targetLang!.code);
+
+    await _ensureModelDownloaded(sourceCode, _sourceLang!.name);
+    await _ensureModelDownloaded(targetCode, _targetLang!.name);
+
+    return _translationService.translate(text: text, sourceCode: sourceCode, targetCode: targetCode);
   }
 
   /// Dịch 1 lần đoạn text hiện có trong ô nhập (dùng khi gõ tay, không ở chế độ trực tiếp)
@@ -108,6 +153,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
       if (!mounted) return;
       setState(() => _translatedText = result);
       _saveToHistory(text, result);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Dịch thất bại: $e')));
     } finally {
       if (mounted) setState(() => _isTranslating = false);
     }
@@ -168,7 +216,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     });
 
     // TODO: Nối với vosk_flutter tại đây:
-    // 1. Khởi tạo Recognizer bằng model theo `_sourceLang!.voskModelName`.
+    // 1. Khởi tạo Recognizer bằng model lấy từ `ModelService().getActiveVoskModel(_sourceLang!.code)`.
     // 2. Mở stream audio từ mic, lắng nghe kết quả nhận diện (partial + final).
     // 3. Với mỗi câu nhận diện HOÀN CHỈNH (final result), gọi `_onSpeechRecognized(text)`
     //    bên dưới để tự động dịch ngay - không cần người dùng bấm gì thêm.
@@ -197,13 +245,18 @@ class _TranslateScreenState extends State<TranslateScreen> {
     if (recognizedText.trim().isEmpty) return;
     setState(() => _inputController.text = recognizedText);
 
-    final result = await _translate(recognizedText);
-    if (!mounted) return;
-    setState(() => _translatedText = result);
-    _saveToHistory(recognizedText, result, type: 'speech');
+    try {
+      final result = await _translate(recognizedText);
+      if (!mounted) return;
+      setState(() => _translatedText = result);
+      _saveToHistory(recognizedText, result, type: 'speech');
 
-    // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
-    _speak(result, _targetLang?.code);
+      // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
+      _speak(result, _targetLang?.code);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Dịch thất bại: $e')));
+    }
   }
 
   @override
@@ -221,6 +274,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
             children: [
               _buildLanguageSelector(),
               const SizedBox(height: 16),
+              if (_downloadingModelLabel != null) _buildDownloadingBanner(),
               _buildInputCard(),
               const SizedBox(height: 16),
               _buildLiveTranslateButton(),
@@ -229,6 +283,30 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildDownloadingBanner() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Đang tải model dịch "$_downloadingModelLabel" (chỉ tải 1 lần)...',
+              style: TextStyle(fontSize: 12.5, color: Theme.of(context).colorScheme.onPrimaryContainer),
+            ),
+          ),
+        ],
       ),
     );
   }

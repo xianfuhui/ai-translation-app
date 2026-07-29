@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const morgan = require('morgan');
 const connectDB = require('./src/config/db');
@@ -13,6 +14,7 @@ const vocabularyRoutes = require('./src/routes/vocabularyRoutes');
 const historyRoutes = require('./src/routes/historyRoutes');
 const languageRoutes = require('./src/routes/languageRoutes');
 const statsRoutes = require('./src/routes/statsRoutes');
+const modelRoutes = require('./src/routes/modelRoutes');
 
 const app = express();
 
@@ -23,6 +25,9 @@ connectDB();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 app.use(morgan('dev'));
+
+// Cho phép tải trực tiếp file model (Vosk/ML Kit) đã admin upload
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
@@ -35,6 +40,7 @@ app.use('/api/vocabulary', vocabularyRoutes); // Quản lý từ vựng + Flashc
 app.use('/api/history', historyRoutes); // Lịch sử hoạt động
 app.use('/api/languages', languageRoutes); // Ngôn ngữ hỗ trợ
 app.use('/api/stats', statsRoutes); // Thống kê hệ thống (Admin)
+app.use('/api/models', modelRoutes); // Kho model Vosk (STT) + ML Kit (dịch)
 
 // Xử lý lỗi
 app.use(notFound);

@@ -32,7 +32,7 @@ Vào `http://localhost:4000/login`, dùng email/mật khẩu admin đã seed (m�
 | Người dùng | `/users` | Tìm kiếm, đổi vai trò, khóa/mở khóa, xóa tài khoản |
 | Kho từ vựng | `/vocabulary` | Thêm/xóa từ vựng hệ thống, tìm kiếm theo chủ đề |
 | Lịch sử dịch | `/history` | Xem & xóa lịch sử dịch thuật toàn hệ thống, lọc theo ngày |
-| Ngôn ngữ | `/languages` | Thêm/bật-tắt/xóa ngôn ngữ và model dịch (Vosk, model dịch) hỗ trợ |
+| Ngôn ngữ & Model | `/languages` | Thêm/bật-tắt/xóa ngôn ngữ; mỗi ngôn ngữ có mục quản lý model Vosk (STT) và ML Kit (dịch) riêng — thêm/sửa/xóa, **upload file model trực tiếp** (.zip, .tflite...) hoặc dán link tải ngoài |
 
 ## 5. Kiến trúc
 

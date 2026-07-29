@@ -27,6 +27,9 @@ dependencies:
   # tương đương mục đích với ML Kit trên Android)
   flutter_tts: ^4.0.2
 
+  # Dịch offline bằng Google ML Kit Translation (tự tải model ngôn ngữ về máy khi cần)
+  google_mlkit_translation: ^0.13.0
+
   # Speech-to-Text offline (Vosk): CHƯA thêm ở đây vì gói `vosk_flutter` hiện
   # yêu cầu http ^0.13.x, xung đột với http ^1.x đang dùng trong project.
   # Khi tích hợp thật, thêm bằng lệnh:

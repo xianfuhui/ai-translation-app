@@ -1,0 +1,23 @@
+<form method="POST" action="/languages/models" enctype="multipart/form-data" style="margin-top:8px; display:flex; flex-direction:column; gap:6px; padding:10px; border:1px dashed var(--hairline); border-radius:6px;">
+  <input type="hidden" name="type" value="<%= type %>" />
+  <input type="hidden" name="languageCode" value="<%= languageCode %>" />
+
+  <input type="text" name="name" placeholder="Tên hiển thị (vd: <%= type === 'vosk' ? 'Vosk English Small' : 'ML Kit English' %>)" required />
+  <input type="text" name="identifier" placeholder="Identifier (<%= type === 'vosk' ? 'vd: vosk-model-small-en-us-0.15' : 'mã ML Kit, vd: en' %>)" required />
+
+  <% if (type === 'vosk') { %>
+    <label style="font-size:11px;">Upload file model (.zip)</label>
+    <input type="file" name="modelFile" />
+    <input type="text" name="downloadUrl" placeholder="Hoặc dán link tải ngoài (nếu không upload)" />
+    <input type="number" name="sizeMB" placeholder="Kích thước (MB) - tự tính nếu upload file" />
+  <% } else { %>
+    <p style="font-size:11px; color:var(--text-muted); margin:0;">
+      ML Kit tự tải model chính chủ Google theo <code>identifier</code> — không cần upload file để dịch hoạt động.
+      Có thể upload file ở đây chỉ để lưu trữ/tham khảo (tùy chọn).
+    </p>
+    <input type="file" name="modelFile" />
+  <% } %>
+
+  <input type="text" name="description" placeholder="Ghi chú (tùy chọn)" />
+  <button type="submit" class="btn btn-primary btn-sm">Thêm model <%= type === 'vosk' ? 'Vosk' : 'ML Kit' %></button>
+</form>
