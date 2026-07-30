@@ -10,10 +10,21 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  // QUAN TRỌNG: giữ nguyên tên file gốc (không thêm tiền tố), vì `vosk_flutter`
+  // (ModelLoader) dựa vào tên file .zip để xác định đúng thư mục con chứa file
+  // model bên trong sau khi giải nén (zip Vosk luôn có 1 thư mục con trùng tên
+  // file, vd "vosk-model-small-en-us-0.15/"). Nếu đổi tên file lúc lưu, app sẽ
+  // không tìm thấy thư mục model đúng -> lỗi "does not contain model files".
+  // Để tránh trùng tên giữa các lần upload, mỗi file được đặt trong 1 thư mục
+  // con riêng (theo timestamp) thay vì đổi tên file.
+  destination: (req, file, cb) => {
+    const subDir = path.join(UPLOAD_DIR, String(Date.now()));
+    fs.mkdirSync(subDir, { recursive: true });
+    cb(null, subDir);
+  },
   filename: (req, file, cb) => {
     const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, `${Date.now()}-${safeName}`);
+    cb(null, safeName);
   },
 });
 

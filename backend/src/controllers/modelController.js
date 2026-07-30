@@ -6,10 +6,16 @@ const { UPLOAD_DIR } = require('../middleware/upload');
 const deleteFileIfExists = (fileName) => {
   if (!fileName) return;
   const filePath = path.join(UPLOAD_DIR, fileName);
-  fs.unlink(filePath, (err) => {
-    if (err && err.code !== 'ENOENT') console.error('Không xóa được file model cũ:', err.message);
+  // Mỗi file được lưu trong 1 thư mục con riêng (xem upload.js) -> xóa luôn cả
+  // thư mục con đó cho gọn, thay vì chỉ xóa 1 file.
+  fs.rm(path.dirname(filePath), { recursive: true, force: true }, (err) => {
+    if (err) console.error('Không xóa được thư mục file model cũ:', err.message);
   });
 };
+
+// Lấy đường dẫn tương đối (có cả thư mục con) để lưu vào DB, dùng "/" thống nhất
+// giữa các hệ điều hành (Windows dùng "\\") để ghép URL cho đúng.
+const relativeUploadPath = (file) => path.relative(UPLOAD_DIR, file.path).split(path.sep).join('/');
 
 // @desc    Lấy danh sách model (lọc theo type, languageCode); Mobile dùng để biết model nào khả dụng
 // @route   GET /api/models?type=vosk|mlkit&languageCode=en&all=true
@@ -33,7 +39,7 @@ const createModel = async (req, res, next) => {
   try {
     const payload = { ...req.body };
     if (req.file) {
-      payload.fileName = req.file.filename;
+      payload.fileName = relativeUploadPath(req.file);
       payload.originalFileName = req.file.originalname;
       payload.sizeMB = Math.round((req.file.size / (1024 * 1024)) * 10) / 10;
     }
@@ -41,7 +47,7 @@ const createModel = async (req, res, next) => {
     const model = await Model.create(payload);
     res.status(201).json(model);
   } catch (error) {
-    if (req.file) deleteFileIfExists(req.file.filename); // dọn file nếu tạo record thất bại
+    if (req.file) deleteFileIfExists(relativeUploadPath(req.file)); // dọn file nếu tạo record thất bại
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Model này (cùng loại, ngôn ngữ, identifier) đã tồn tại' });
     }
@@ -58,7 +64,7 @@ const updateModel = async (req, res, next) => {
 
     const payload = { ...req.body };
     if (req.file) {
-      payload.fileName = req.file.filename;
+      payload.fileName = relativeUploadPath(req.file);
       payload.originalFileName = req.file.originalname;
       payload.sizeMB = Math.round((req.file.size / (1024 * 1024)) * 10) / 10;
     }
@@ -70,7 +76,7 @@ const updateModel = async (req, res, next) => {
 
     res.json(model);
   } catch (error) {
-    if (req.file) deleteFileIfExists(req.file.filename);
+    if (req.file) deleteFileIfExists(relativeUploadPath(req.file));
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Model này (cùng loại, ngôn ngữ, identifier) đã tồn tại' });
     }
