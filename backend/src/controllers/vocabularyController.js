@@ -9,7 +9,8 @@ const SystemVocabulary = require('../models/SystemVocabulary');
 const saveVocabulary = async (req, res, next) => {
   try {
     const { word, meaning, sourceLanguage, targetLanguage, source } = req.body;
-    if (!word) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
+    if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
+    if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
 
     // Lấy âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
     let audioUrl;
@@ -63,6 +64,22 @@ const addToFlashcard = async (req, res, next) => {
   }
 };
 
+// @desc    Bỏ từ vựng ra khỏi mục Flashcard
+// @route   DELETE /api/vocabulary/:id/flashcard
+const removeFromFlashcard = async (req, res, next) => {
+  try {
+    const vocab = await Vocabulary.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id },
+      { inFlashcard: false },
+      { new: true }
+    );
+    if (!vocab) return res.status(404).json({ message: 'Không tìm thấy từ vựng' });
+    res.json(vocab);
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Xóa từ vựng yêu thích
 // @route   DELETE /api/vocabulary/:id
 const deleteVocabulary = async (req, res, next) => {
@@ -97,6 +114,10 @@ const getSystemVocabulary = async (req, res, next) => {
 // @route   POST /api/vocabulary/system
 const createSystemVocabulary = async (req, res, next) => {
   try {
+    const { word, meaning } = req.body;
+    if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
+    if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
+
     const item = await SystemVocabulary.create({ ...req.body, createdBy: req.user._id });
     res.status(201).json(item);
   } catch (error) {
@@ -132,6 +153,7 @@ module.exports = {
   saveVocabulary,
   getMyVocabulary,
   addToFlashcard,
+  removeFromFlashcard,
   deleteVocabulary,
   getSystemVocabulary,
   createSystemVocabulary,

@@ -43,6 +43,21 @@ class _FlashcardScreenState extends State<FlashcardScreen> {
     await _tts.speak(word);
   }
 
+  Future<void> _removeCard(VocabularyItem card) async {
+    try {
+      await _service.removeFromFlashcard(card.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã bỏ khỏi Flashcard')));
+      setState(() {
+        _cards = _cards.where((c) => c.id != card.id).toList();
+        _showMeaning = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Thao tác thất bại: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -102,6 +117,12 @@ class _FlashcardScreenState extends State<FlashcardScreen> {
                           Text(
                             _showMeaning ? 'Chạm vào thẻ để ẩn nghĩa' : 'Chạm vào thẻ để xem nghĩa',
                             style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                          const SizedBox(height: 8),
+                          TextButton.icon(
+                            onPressed: () => _removeCard(card),
+                            icon: const Icon(Icons.remove_circle_outline, size: 18),
+                            label: const Text('Bỏ khỏi Flashcard'),
                           ),
                           const Spacer(),
                         ],

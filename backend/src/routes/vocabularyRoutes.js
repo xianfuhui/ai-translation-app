@@ -4,6 +4,7 @@ const {
   saveVocabulary,
   getMyVocabulary,
   addToFlashcard,
+  removeFromFlashcard,
   deleteVocabulary,
   getSystemVocabulary,
   createSystemVocabulary,
@@ -18,6 +19,7 @@ router.use(protect);
 router.post('/', saveVocabulary);
 router.get('/', getMyVocabulary);
 router.put('/:id/flashcard', addToFlashcard);
+router.delete('/:id/flashcard', removeFromFlashcard);
 router.delete('/:id', deleteVocabulary);
 
 // Kho từ vựng hệ thống - User xem/tra cứu, Admin CRUD

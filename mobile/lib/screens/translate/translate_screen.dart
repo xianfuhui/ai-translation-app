@@ -185,9 +185,41 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Future<void> _saveWordAsVocabulary(String word) async {
+    if (word.trim().isEmpty) return;
+
+    // Bắt buộc phải có nghĩa/bản dịch đi kèm từ gốc khi thêm vào danh sách từ vựng
+    final formKey = GlobalKey<FormState>();
+    final meaningController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Lưu từ "$word"'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: meaningController,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Nghĩa của từ *'),
+            validator: (v) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập nghĩa của từ' : null,
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) Navigator.pop(context, true);
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     try {
       await _vocabularyService.saveVocabulary(
         word: word,
+        meaning: meaningController.text.trim(),
         sourceLanguage: _sourceLang?.code,
         targetLanguage: _targetLang?.code,
         source: 'conversation',

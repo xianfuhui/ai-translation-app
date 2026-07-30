@@ -42,6 +42,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
   }
 
   Future<void> _addManualWord() async {
+    final formKey = GlobalKey<FormState>();
     final wordController = TextEditingController();
     final meaningController = TextEditingController();
 
@@ -49,21 +50,39 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Thêm từ vựng'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: wordController, decoration: const InputDecoration(labelText: 'Từ vựng')),
-            TextField(controller: meaningController, decoration: const InputDecoration(labelText: 'Nghĩa')),
-          ],
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: wordController,
+                decoration: const InputDecoration(labelText: 'Từ vựng *'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập từ vựng' : null,
+              ),
+              TextFormField(
+                controller: meaningController,
+                decoration: const InputDecoration(labelText: 'Nghĩa *'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập nghĩa của từ' : null,
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Lưu')),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.pop(context, true);
+              }
+            },
+            child: const Text('Lưu'),
+          ),
         ],
       ),
     );
 
-    if (saved == true && wordController.text.trim().isNotEmpty) {
+    if (saved == true) {
       try {
         await _service.saveVocabulary(word: wordController.text.trim(), meaning: meaningController.text.trim(), source: 'manual');
         _loadData();
@@ -74,11 +93,17 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
     }
   }
 
-  Future<void> _addToFlashcard(VocabularyItem item) async {
+  Future<void> _toggleFlashcard(VocabularyItem item) async {
     try {
-      await _service.addToFlashcard(item.id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã thêm vào Flashcard')));
+      if (item.inFlashcard) {
+        await _service.removeFromFlashcard(item.id);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã bỏ khỏi Flashcard')));
+      } else {
+        await _service.addToFlashcard(item.id);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã thêm vào Flashcard')));
+      }
       _loadData();
     } catch (e) {
       if (!mounted) return;
@@ -139,8 +164,8 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
                 IconButton(
                   icon: Icon(item.inFlashcard ? Icons.style : Icons.style_outlined,
                       color: item.inFlashcard ? Theme.of(context).colorScheme.primary : null),
-                  tooltip: 'Thêm vào Flashcard',
-                  onPressed: item.inFlashcard ? null : () => _addToFlashcard(item),
+                  tooltip: item.inFlashcard ? 'Bỏ khỏi Flashcard' : 'Thêm vào Flashcard',
+                  onPressed: () => _toggleFlashcard(item),
                 ),
                 IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _deleteVocab(item)),
               ],
@@ -168,7 +193,7 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
             onPressed: () async {
               await _service.saveVocabulary(
                 word: item.word,
-                meaning: item.meaning,
+                meaning: item.meaning ?? '',
                 sourceLanguage: item.sourceLanguage,
                 targetLanguage: item.targetLanguage,
               );

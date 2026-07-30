@@ -6,7 +6,7 @@ class VocabularyService {
 
   Future<VocabularyItem> saveVocabulary({
     required String word,
-    String? meaning,
+    required String meaning,
     String? sourceLanguage,
     String? targetLanguage,
     String source = 'manual',
@@ -29,6 +29,10 @@ class VocabularyService {
 
   Future<void> addToFlashcard(String id) async {
     await _api.put('/vocabulary/$id/flashcard');
+  }
+
+  Future<void> removeFromFlashcard(String id) async {
+    await _api.delete('/vocabulary/$id/flashcard');
   }
 
   Future<void> deleteVocabulary(String id) async {

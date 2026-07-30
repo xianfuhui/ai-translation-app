@@ -4,7 +4,7 @@ const vocabularySchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     word: { type: String, required: true, trim: true },
-    meaning: { type: String, trim: true },
+    meaning: { type: String, required: true, trim: true },
     sourceLanguage: { type: String, trim: true },
     targetLanguage: { type: String, trim: true },
     // Nguồn thêm từ: từ đoạn hội thoại (click chọn) hoặc tự nhập tay
