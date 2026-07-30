@@ -3,18 +3,18 @@ import 'dart:convert';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:vosk_flutter/vosk_flutter.dart';
 
-/// Bọc gọn API của `vosk_flutter` để nhận diện giọng nói offline.
+/// Bọc gọn API của `vosk_flutter_2` để nhận diện giọng nói offline.
 ///
 /// Cách dùng trong 1 màn hình:
 /// ```dart
 /// final vosk = VoskService();
-/// await vosk.loadModel(modelUrl, languageCode: 'en');
-/// await vosk.start(
+/// await vosk.loadModel(modelUrl);
+/// await vosk.startListening(
 ///   onResult: (text) => print('Câu hoàn chỉnh: $text'),
 ///   onPartial: (text) => print('Đang nói: $text'),
 /// );
 /// ...
-/// await vosk.stop();
+/// await vosk.stopListening();
 /// await vosk.dispose();
 /// ```
 class VoskService {
@@ -26,7 +26,7 @@ class VoskService {
   Model? _model;
   Recognizer? _recognizer;
   SpeechService? _speechService;
-  String? _loadedLanguageCode;
+  String? _loadedModelUrl;
 
   StreamSubscription<String>? _resultSubscription;
   StreamSubscription<String>? _partialSubscription;
@@ -41,34 +41,40 @@ class VoskService {
     return status.isGranted;
   }
 
-  /// Tải (nếu cần tải qua mạng) và nạp model Vosk cho 1 ngôn ngữ.
+  /// Tải (nếu cần tải qua mạng) và nạp model Vosk.
   /// [modelUrl] là link file .zip - lấy từ `ModelService().getDownloadUrl(voskModel)`.
-  /// Không tải lại nếu ngôn ngữ này đã được nạp sẵn từ trước.
-  Future<void> loadModel(String modelUrl, {required String languageCode}) async {
-    if (_loadedLanguageCode == languageCode && _model != null) return;
+  /// Không tải lại nếu model với cùng URL này đã được nạp sẵn từ trước.
+  Future<void> loadModel(String modelUrl) async {
+    if (_loadedModelUrl == modelUrl && _speechService != null) return;
 
     await _teardown();
 
-    // ModelLoader tự tải model .zip qua mạng, cache lại, và giải nén sẵn.
-    final modelPath = await _modelLoader.loadFromNetwork(modelUrl);
-    _model = await _vosk.createModel(modelPath);
-    _recognizer = await _vosk.createRecognizer(model: _model!, sampleRate: _sampleRate);
-    _speechService = await _vosk.initSpeechService(_recognizer!);
-    _loadedLanguageCode = languageCode;
+    try {
+      // ModelLoader tự tải model .zip qua mạng, cache lại, và giải nén sẵn.
+      final modelPath = await _modelLoader.loadFromNetwork(modelUrl);
+      _model = await _vosk.createModel(modelPath);
+      _recognizer = await _vosk.createRecognizer(model: _model!, sampleRate: _sampleRate);
+      _speechService = await _vosk.initSpeechService(_recognizer!);
+      _loadedModelUrl = modelUrl;
+    } catch (e) {
+      await _teardown();
+      throw Exception('Không nạp được model Vosk: $e');
+    }
   }
 
   /// Bắt đầu nghe mic và nhận diện liên tục.
   /// [onResult] được gọi mỗi khi có 1 câu hoàn chỉnh (final result).
   /// [onPartial] (tùy chọn) được gọi liên tục trong lúc đang nói (partial result),
   /// hữu ích để hiển thị "đang nói..." theo thời gian thực.
-  Future<void> start({
+  Future<void> startListening({
     required void Function(String text) onResult,
     void Function(String text)? onPartial,
   }) async {
     final service = _speechService;
     if (service == null) {
-      throw Exception('Model Vosk chưa được nạp - gọi loadModel() trước khi start()');
+      throw Exception('Model Vosk chưa được nạp - gọi loadModel() trước khi startListening()');
     }
+    if (_isListening) return;
 
     final granted = await requestMicPermission();
     if (!granted) {
@@ -95,7 +101,8 @@ class VoskService {
   }
 
   /// Dừng nghe mic (giữ nguyên model đã nạp để dùng lại lần sau, không cần tải lại).
-  Future<void> stop() async {
+  Future<void> stopListening() async {
+    if (!_isListening) return;
     await _speechService?.stop();
     await _resultSubscription?.cancel();
     await _partialSubscription?.cancel();
@@ -114,11 +121,11 @@ class VoskService {
   }
 
   Future<void> _teardown() async {
-    await stop();
+    await stopListening();
     _speechService = null;
     _recognizer = null;
     _model = null;
-    _loadedLanguageCode = null;
+    _loadedModelUrl = null;
   }
 
   Future<void> dispose() async {

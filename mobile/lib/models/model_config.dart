@@ -7,7 +7,7 @@ class ModelConfig {
   final String? downloadUrl;
   final String? fileUrl; // đường dẫn tương đối file đã Admin upload trên backend (nếu có)
   final String? originalFileName;
-  final int? sizeMB;
+  final double? sizeMB;
   final String? description;
   final bool isActive;
 
@@ -38,7 +38,7 @@ class ModelConfig {
       downloadUrl: json['downloadUrl'],
       fileUrl: json['fileUrl'],
       originalFileName: json['originalFileName'],
-      sizeMB: json['sizeMB'],
+      sizeMB: (json['sizeMB'] as num?)?.toDouble(),
       description: json['description'],
       isActive: json['isActive'] ?? true,
     );

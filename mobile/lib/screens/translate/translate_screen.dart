@@ -12,9 +12,9 @@ import '../../services/vosk_service.dart';
 ///
 /// LƯU Ý VỀ OFFLINE:
 /// - Danh sách ngôn ngữ tải 1 lần từ backend rồi cache lại để dùng offline.
-/// - Speech-to-Text dùng gói `vosk_flutter` (chính chủ alphacep) — ghi âm mic
-///   thật, tự tải model theo cấu hình Admin qua `ModelService`, nhận diện
-///   offline hoàn toàn (xem `VoskService`).
+/// - Speech-to-Text dùng gói `vosk_flutter` (chính chủ alphacep, bản 0.3.48) —
+///   ghi âm mic thật, tự tải model theo cấu hình Admin qua `ModelService`,
+///   nhận diện offline hoàn toàn (xem `VoskService`).
 /// - Text-to-Speech dùng `flutter_tts` (dùng engine TTS hệ thống, tương đương
 ///   mục tiêu của ML Kit trên Android).
 /// - DỊCH văn bản dùng Google ML Kit Translation (`google_mlkit_translation`),

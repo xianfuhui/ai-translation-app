@@ -12,7 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.6
 
   # Gọi API backend
-  http: ^1.2.1
+  http: ^0.13.6
 
   # Lưu JWT token an toàn trên thiết bị
   flutter_secure_storage: ^9.2.2
@@ -30,15 +30,23 @@ dependencies:
   # Dịch offline bằng Google ML Kit Translation (tự tải model ngôn ngữ về máy khi cần)
   google_mlkit_translation: ^0.13.0
 
-  # Speech-to-Text offline (Vosk) - bản chính chủ alphacep, đã hỗ trợ http ^1.x nên
-  # không còn xung đột version như các bản cũ.
-  vosk_flutter: ^0.4.0
+  # Speech-to-Text offline (Vosk) - bản chính chủ alphacep.
+  # Lưu ý: 0.4.0 KHÔNG tồn tại trên pub.dev, bản mới nhất hiện tại là 0.3.48.
+  vosk_flutter: ^0.3.48
   permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+
+# vosk_flutter tự khai permission_handler: ^11.3.1, kéo theo bản
+# permission_handler_android rất cũ (10.3.6) còn dùng API Embedding v1
+# (PluginRegistry.Registrar) đã bị Flutter xóa hẳn ở bản mới -> lỗi
+# "cannot find symbol class Registrar" khi build.
+# Ép toàn bộ project dùng permission_handler bản mới (đã bỏ API cũ).
+dependency_overrides:
+  permission_handler: ^12.0.1
 
 flutter:
   uses-material-design: true

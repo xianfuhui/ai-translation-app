@@ -5,6 +5,17 @@ allprojects {
     }
 }
 
+subprojects {
+    if (project.name == "vosk_flutter") {
+        afterEvaluate {
+            extensions.configure<com.android.build.gradle.LibraryExtension> {
+                namespace = "org.vosk.vosk_flutter"
+                compileSdk = 36
+            }
+        }
+    }
+}
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")
