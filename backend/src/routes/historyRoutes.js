@@ -4,6 +4,7 @@ const {
   createHistory,
   getMyHistory,
   deleteMyHistory,
+  summarizeHistory,
   getAllHistoryAdmin,
   deleteHistoryAdmin,
 } = require('../controllers/historyController');
@@ -14,6 +15,7 @@ router.use(protect);
 // Lịch sử cá nhân (Mobile)
 router.post('/', createHistory);
 router.get('/', getMyHistory);
+router.post('/:id/summarize', summarizeHistory);
 router.delete('/:id', deleteMyHistory);
 
 // Quản lý lịch sử toàn hệ thống (Web Admin)

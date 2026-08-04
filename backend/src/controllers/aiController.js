@@ -1,19 +1,5 @@
-const axios = require('axios');
 const AIConversation = require('../models/AIConversation');
-
-const GEMINI_API_URL = (model) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-
-// Gọi Gemini API với danh sách nội dung (contents)
-const callGemini = async (contents) => {
-  const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const response = await axios.post(
-    `${GEMINI_API_URL(model)}?key=${process.env.GEMINI_API_KEY}`,
-    { contents },
-    { headers: { 'Content-Type': 'application/json' } }
-  );
-  return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-};
+const { callGemini, truncateForLlm, MAX_LLM_INPUT_CHARS } = require('../utils/gemini');
 
 // @desc    Gửi tin nhắn hội thoại với AI (tạo mới hoặc tiếp tục conversationId)
 // @route   POST /api/ai/chat
@@ -73,7 +59,12 @@ const summarize = async (req, res, next) => {
       .map((m) => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content}`)
       .join('\n');
 
-    const prompt = `Hãy tóm tắt ngắn gọn, súc tích nội dung chính của cuộc hội thoại sau bằng tiếng Việt:\n\n${transcript}`;
+    // Tính năng LLM có giới hạn số ký tự đầu vào -> tự động cắt bớt nếu hội thoại quá dài
+    const { text: safeTranscript, truncated } = truncateForLlm(transcript);
+
+    const prompt = `Hãy tóm tắt ngắn gọn, súc tích nội dung chính của cuộc hội thoại sau bằng tiếng Việt${
+      truncated ? ' (một phần nội dung đã được lược bớt do quá dài)' : ''
+    }:\n\n${safeTranscript}`;
 
     const summary = await callGemini([{ role: 'user', parts: [{ text: prompt }] }]);
 

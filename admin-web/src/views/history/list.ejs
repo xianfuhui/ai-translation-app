@@ -37,13 +37,29 @@
           </thead>
           <tbody>
             <% records.forEach(r => { %>
+              <% 
+                const isConversation = r.type === 'conversation' && Array.isArray(r.segments) && r.segments.length > 0;
+                const srcPreview = isConversation
+                  ? r.segments.map(s => s.sourceText).join(' / ')
+                  : (r.sourceText || '');
+                const trPreview = isConversation
+                  ? r.segments.map(s => s.translatedText).join(' / ')
+                  : (r.translatedText || '');
+              %>
               <tr>
                 <td><%= r.user?.fullName || '—' %><br/><span class="mono" style="font-size:11px;color:var(--text-muted);"><%= r.user?.email %></span></td>
                 <td class="mono"><%= r.sourceLanguage %> → <%= r.targetLanguage %></td>
-                <td><%= r.sourceText.length > 60 ? r.sourceText.slice(0,60)+'…' : r.sourceText %></td>
-                <td><%= r.translatedText.length > 60 ? r.translatedText.slice(0,60)+'…' : r.translatedText %></td>
-                <td><%= r.type %></td>
-                <td class="mono"><%= new Date(r.createdAt).toLocaleString('vi-VN') %></td>
+                <td><%= srcPreview.length > 60 ? srcPreview.slice(0,60)+'…' : srcPreview %></td>
+                <td><%= trPreview.length > 60 ? trPreview.slice(0,60)+'…' : trPreview %></td>
+                <td><%= r.type %><%= isConversation ? ` (${r.segments.length} lượt)` : '' %></td>
+                <td class="mono">
+                  <% if (isConversation && r.startedAt && r.endedAt) { %>
+                    <%= new Date(r.startedAt).toLocaleTimeString('vi-VN') %> → <%= new Date(r.endedAt).toLocaleTimeString('vi-VN') %>
+                    <br/><span style="font-size:11px;color:var(--text-muted);"><%= new Date(r.startedAt).toLocaleDateString('vi-VN') %></span>
+                  <% } else { %>
+                    <%= new Date(r.createdAt).toLocaleString('vi-VN') %>
+                  <% } %>
+                </td>
                 <td>
                   <form class="inline-form" method="POST" action="/history/<%= r._id %>/delete" onsubmit="return confirm('Xóa bản ghi này?');">
                     <button type="submit" class="btn btn-danger btn-sm">Xóa</button>

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../../models/language.dart';
+import '../../models/history.dart';
 import '../../services/language_service.dart';
 import '../../services/history_service.dart';
 import '../../services/vocabulary_service.dart';
@@ -57,6 +58,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   // Trạng thái chế độ dịch trực tiếp (start/stop)
   bool _isLiveTranslating = false;
+  // Gom tất cả các lượt nói trong 1 phiên Bắt đầu -> Dừng để khi Dừng chỉ lưu
+  // MỘT mục lịch sử duy nhất (thay vì mỗi câu 1 mục).
+  final List<HistorySegment> _sessionSegments = [];
+  DateTime? _sessionStartedAt;
 
   @override
   void dispose() {
@@ -64,6 +69,17 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _tts.stop();
     _translationService.dispose();
     _voskService.dispose();
+    if (_sessionSegments.isNotEmpty && _sourceLang != null && _targetLang != null) {
+      _historyService
+          .createConversationHistory(
+            sourceLanguage: _sourceLang!.code,
+            targetLanguage: _targetLang!.code,
+            segments: List<HistorySegment>.from(_sessionSegments),
+            startedAt: _sessionStartedAt ?? _sessionSegments.first.at,
+            endedAt: DateTime.now(),
+          )
+          .catchError((_) {});
+    }
     super.dispose();
   }
 
@@ -250,6 +266,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
       _isLiveTranslating = true;
       _inputController.clear();
       _translatedText = '';
+      _sessionSegments.clear();
+      _sessionStartedAt = DateTime.now();
     });
 
     try {
@@ -292,10 +310,30 @@ class _TranslateScreenState extends State<TranslateScreen> {
     await _voskService.stopListening();
     if (!mounted) return;
     setState(() => _isLiveTranslating = false);
+
+    // Kết thúc phiên (Dừng) -> lưu TOÀN BỘ các lượt nói trong phiên này thành
+    // 1 mục lịch sử "conversation" duy nhất (không lưu riêng lẻ từng câu nữa).
+    if (_sessionSegments.isNotEmpty && _sourceLang != null && _targetLang != null) {
+      final segmentsToSave = List<HistorySegment>.from(_sessionSegments);
+      final startedAt = _sessionStartedAt ?? segmentsToSave.first.at;
+      final endedAt = DateTime.now();
+      _sessionSegments.clear();
+      _sessionStartedAt = null;
+      _historyService
+          .createConversationHistory(
+            sourceLanguage: _sourceLang!.code,
+            targetLanguage: _targetLang!.code,
+            segments: segmentsToSave,
+            startedAt: startedAt,
+            endedAt: endedAt,
+          )
+          .catchError((_) {});
+    }
   }
 
   /// Được gọi mỗi khi nhận diện được 1 câu hoàn chỉnh trong lúc dịch trực tiếp.
-  /// Tự động dịch ngay và cập nhật kết quả, không cần thao tác thêm.
+  /// Tự động dịch ngay và cập nhật kết quả; câu này được gom vào phiên hiện tại,
+  /// chỉ lưu thành lịch sử khi người dùng bấm Dừng (gộp cả phiên thành 1 mục).
   Future<void> _onSpeechRecognized(String recognizedText) async {
     if (recognizedText.trim().isEmpty) return;
     setState(() => _inputController.text = recognizedText);
@@ -304,7 +342,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final result = await _translate(recognizedText);
       if (!mounted) return;
       setState(() => _translatedText = result);
-      _saveToHistory(recognizedText, result, type: 'speech');
+      _sessionSegments.add(HistorySegment(sourceText: recognizedText, translatedText: result));
 
       // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
       _speak(result, _targetLang?.code);

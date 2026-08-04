@@ -95,6 +95,20 @@ async function run() {
       type: 'text',
       createdAt: new Date(now - 1000 * 60 * 60 * 24 * 2),
     },
+    {
+      user: user1._id,
+      sourceLanguage: 'en',
+      targetLanguage: 'vi',
+      type: 'conversation',
+      segments: [
+        { sourceText: 'Hello, how are you today?', translatedText: 'Xin chào, hôm nay bạn khỏe không?', at: new Date(now - 1000 * 60 * 60 * 5) },
+        { sourceText: 'I am fine, thank you. And you?', translatedText: 'Tôi khỏe, cảm ơn. Còn bạn?', at: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 20) },
+        { sourceText: 'Let’s start the meeting now.', translatedText: 'Chúng ta bắt đầu cuộc họp thôi.', at: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 45) },
+      ],
+      startedAt: new Date(now - 1000 * 60 * 60 * 5),
+      endedAt: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 50),
+      createdAt: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 50),
+    },
   ]);
   console.log(`✅ Đã tạo ${history.length} bản ghi lịch sử dịch thuật`);
 
