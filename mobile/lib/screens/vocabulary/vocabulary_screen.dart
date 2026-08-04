@@ -85,6 +85,10 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
     if (saved == true) {
       try {
         await _service.saveVocabulary(word: wordController.text.trim(), meaning: meaningController.text.trim(), source: 'manual');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã thêm "${wordController.text.trim()}" vào danh sách từ vựng yêu thích')),
+        );
         _loadData();
       } catch (e) {
         if (!mounted) return;
@@ -191,13 +195,22 @@ class _VocabularyScreenState extends State<VocabularyScreen> with SingleTickerPr
             icon: const Icon(Icons.bookmark_add_outlined),
             tooltip: 'Lưu vào từ vựng của tôi',
             onPressed: () async {
-              await _service.saveVocabulary(
-                word: item.word,
-                meaning: item.meaning ?? '',
-                sourceLanguage: item.sourceLanguage,
-                targetLanguage: item.targetLanguage,
-              );
-              _loadData();
+              try {
+                await _service.saveVocabulary(
+                  word: item.word,
+                  meaning: item.meaning ?? '',
+                  sourceLanguage: item.sourceLanguage,
+                  targetLanguage: item.targetLanguage,
+                );
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Đã thêm "${item.word}" vào danh sách từ vựng yêu thích')),
+                );
+                _loadData();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lưu thất bại: $e')));
+              }
             },
           ),
         );
