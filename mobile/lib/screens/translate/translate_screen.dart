@@ -63,6 +63,13 @@ class _TranslateScreenState extends State<TranslateScreen> {
   final List<HistorySegment> _sessionSegments = [];
   DateTime? _sessionStartedAt;
 
+  // Chỉ số các từ đang được CHỌN để ghép thành 1 cụm từ (vd: "đàn" + "bà" ->
+  // "đàn bà") trước khi lưu vào từ vựng - tránh lỗi chỉ lưu được đúng 1 âm tiết
+  // với các từ ghép. Theo dõi riêng cho câu gốc và câu dịch vì là 2 danh sách
+  // từ độc lập.
+  final Set<int> _selectedSourceWordIdx = {};
+  final Set<int> _selectedTargetWordIdx = {};
+
   @override
   void dispose() {
     _inputController.dispose();
@@ -185,7 +192,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
     try {
       final result = await _translate(text);
       if (!mounted) return;
-      setState(() => _translatedText = result);
+      setState(() {
+        _translatedText = result;
+        _clearWordSelections();
+      });
       _saveToHistory(text, result);
     } catch (e) {
       if (!mounted) return;
@@ -215,7 +225,39 @@ class _TranslateScreenState extends State<TranslateScreen> {
     await _tts.speak(text);
   }
 
-  /// Lưu 1 từ vào từ vựng yêu thích khi người dùng chạm vào từ đó trong câu
+  void _toggleWordSelection(int index, {required bool isSourceText}) {
+    setState(() {
+      final set = isSourceText ? _selectedSourceWordIdx : _selectedTargetWordIdx;
+      if (set.contains(index)) {
+        set.remove(index);
+      } else {
+        set.add(index);
+      }
+    });
+  }
+
+  void _clearWordSelections() {
+    _selectedSourceWordIdx.clear();
+    _selectedTargetWordIdx.clear();
+  }
+
+  /// Ghép các từ đang được chọn (theo đúng thứ tự xuất hiện trong câu) thành
+  /// 1 cụm từ, vd chọn "đàn" rồi "bà" -> "đàn bà".
+  String _buildSelectedPhrase(List<String> words, Set<int> selectedIdx) {
+    final sortedIdx = selectedIdx.toList()..sort();
+    return sortedIdx.map((i) => words[i]).join(' ');
+  }
+
+  Future<void> _saveSelectedPhrase(List<String> words, {required bool isFromSourceText}) async {
+    final selectedIdx = isFromSourceText ? _selectedSourceWordIdx : _selectedTargetWordIdx;
+    final phrase = _buildSelectedPhrase(words, selectedIdx);
+    if (phrase.trim().isEmpty) return;
+    await _saveWordAsVocabulary(phrase, isFromSourceText: isFromSourceText);
+    if (!mounted) return;
+    setState(() => selectedIdx.clear());
+  }
+
+
   /// gốc (ngôn ngữ nói) HOẶC trong câu đã dịch (ngôn ngữ dịch).
   /// [isFromSourceText] = true nếu từ được chạm nằm trong câu gốc (ngôn ngữ nói);
   /// = false nếu nằm trong câu đã dịch (ngôn ngữ dịch).
@@ -321,6 +363,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       _translatedText = '';
       _sessionSegments.clear();
       _sessionStartedAt = DateTime.now();
+      _clearWordSelections();
     });
 
     try {
@@ -389,7 +432,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
   /// chỉ lưu thành lịch sử khi người dùng bấm Dừng (gộp cả phiên thành 1 mục).
   Future<void> _onSpeechRecognized(String recognizedText) async {
     if (recognizedText.trim().isEmpty) return;
-    setState(() => _inputController.text = recognizedText);
+    setState(() {
+      _inputController.text = recognizedText;
+      _clearWordSelections();
+    });
 
     try {
       final result = await _translate(recognizedText);
@@ -531,9 +577,57 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
+  /// 1 nhóm từ (câu gốc hoặc câu dịch) cho phép CHỌN NHIỀU từ liên tiếp để
+  /// ghép thành 1 cụm từ trước khi lưu (vd: từ ghép "đàn bà" gồm 2 âm tiết).
+  Widget _buildWordGroup({
+    required String label,
+    required List<String> words,
+    required Set<int> selectedIdx,
+    required bool isFromSourceText,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 4,
+          runSpacing: 4,
+          children: List.generate(words.length, (i) {
+            final selected = selectedIdx.contains(i);
+            return FilterChip(
+              label: Text(words[i]),
+              selected: selected,
+              onSelected: (_) => _toggleWordSelection(i, isSourceText: isFromSourceText),
+            );
+          }),
+        ),
+        if (selectedIdx.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: FilledButton.tonalIcon(
+              onPressed: () => _saveSelectedPhrase(words, isFromSourceText: isFromSourceText),
+              icon: const Icon(Icons.bookmark_add_outlined, size: 16),
+              label: Text('Lưu cụm từ đã chọn: "${_buildSelectedPhrase(words, selectedIdx)}"'),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildResultCard() {
-    final sourceWords = _inputController.text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final translatedWords = _translatedText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final sourceWords = _inputController.text
+        .trim()
+        .split(RegExp(r'\s+'))
+        .map((w) => w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    final translatedWords = _translatedText
+        .trim()
+        .split(RegExp(r'\s+'))
+        .map((w) => w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''))
+        .where((w) => w.isNotEmpty)
+        .toList();
     return Expanded(
       child: Card(
         child: Padding(
@@ -566,43 +660,21 @@ class _TranslateScreenState extends State<TranslateScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (sourceWords.isNotEmpty) ...[
-                        Text('Câu gốc (${_sourceLang?.name ?? ''})',
-                            style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 4),
-                        Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: sourceWords
-                              .map((w) => ActionChip(
-                                    label: Text(w),
-                                    onPressed: () => _saveWordAsVocabulary(
-                                      w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''),
-                                      isFromSourceText: true,
-                                    ),
-                                  ))
-                              .toList(),
+                      if (sourceWords.isNotEmpty)
+                        _buildWordGroup(
+                          label: 'Câu gốc (${_sourceLang?.name ?? ''})',
+                          words: sourceWords,
+                          selectedIdx: _selectedSourceWordIdx,
+                          isFromSourceText: true,
                         ),
-                        const SizedBox(height: 12),
-                      ],
-                      if (translatedWords.isNotEmpty) ...[
-                        Text('Câu dịch (${_targetLang?.name ?? ''})',
-                            style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 4),
-                        Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: translatedWords
-                              .map((w) => ActionChip(
-                                    label: Text(w),
-                                    onPressed: () => _saveWordAsVocabulary(
-                                      w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''),
-                                      isFromSourceText: false,
-                                    ),
-                                  ))
-                              .toList(),
+                      if (sourceWords.isNotEmpty) const SizedBox(height: 12),
+                      if (translatedWords.isNotEmpty)
+                        _buildWordGroup(
+                          label: 'Câu dịch (${_targetLang?.name ?? ''})',
+                          words: translatedWords,
+                          selectedIdx: _selectedTargetWordIdx,
+                          isFromSourceText: false,
                         ),
-                      ],
                     ],
                   ),
                 ),
@@ -610,7 +682,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
               const Padding(
                 padding: EdgeInsets.only(top: 8),
                 child: Text(
-                  'Chạm vào 1 từ (ở câu gốc hoặc câu dịch) để lưu vào từ vựng yêu thích — nghĩa sẽ được điền sẵn, bạn có thể sửa lại',
+                  'Chạm để chọn 1 hoặc NHIỀU từ liền nhau rồi bấm "Lưu cụm từ đã chọn" — hữu ích với '
+                  'từ ghép (vd: "đàn bà") để tránh chỉ lưu được 1 âm tiết. Nghĩa sẽ được điền sẵn, bạn có thể sửa lại.',
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
               ),
