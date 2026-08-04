@@ -148,17 +148,32 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
+  /// Dịch offline bằng ML Kit giữa 2 mã ngôn ngữ bất kỳ (không nhất thiết phải
+  /// đúng chiều nguồn -> đích hiện tại), tự tải model nếu máy chưa có.
+  /// Dùng để: dịch cả câu (chiều nguồn -> đích) VÀ gợi ý nghĩa 1 từ đơn lẻ
+  /// theo chiều ngược lại khi người dùng chạm vào từ trong câu đã dịch.
+  String _langNameForCode(String code) {
+    try {
+      return _languages.firstWhere((l) => l.code == code).name;
+    } catch (_) {
+      return code;
+    }
+  }
+
+  Future<String> _translateBetween(String text, String fromCode, String toCode) async {
+    final resolvedFrom = await _resolveMlkitCode(fromCode);
+    final resolvedTo = await _resolveMlkitCode(toCode);
+
+    await _ensureModelDownloaded(resolvedFrom, _langNameForCode(fromCode));
+    await _ensureModelDownloaded(resolvedTo, _langNameForCode(toCode));
+
+    return _translationService.translate(text: text, sourceCode: resolvedFrom, targetCode: resolvedTo);
+  }
+
   /// Dịch văn bản offline bằng ML Kit, tự tải model ngôn ngữ nếu máy chưa có.
   Future<String> _translate(String text) async {
     if (_sourceLang == null || _targetLang == null) return text;
-
-    final sourceCode = await _resolveMlkitCode(_sourceLang!.code);
-    final targetCode = await _resolveMlkitCode(_targetLang!.code);
-
-    await _ensureModelDownloaded(sourceCode, _sourceLang!.name);
-    await _ensureModelDownloaded(targetCode, _targetLang!.name);
-
-    return _translationService.translate(text: text, sourceCode: sourceCode, targetCode: targetCode);
+    return _translateBetween(text, _sourceLang!.code, _targetLang!.code);
   }
 
   /// Dịch 1 lần đoạn text hiện có trong ô nhập (dùng khi gõ tay, không ở chế độ trực tiếp)
@@ -200,34 +215,70 @@ class _TranslateScreenState extends State<TranslateScreen> {
     await _tts.speak(text);
   }
 
-  Future<void> _saveWordAsVocabulary(String word) async {
-    if (word.trim().isEmpty) return;
+  /// Lưu 1 từ vào từ vựng yêu thích khi người dùng chạm vào từ đó trong câu
+  /// gốc (ngôn ngữ nói) HOẶC trong câu đã dịch (ngôn ngữ dịch).
+  /// [isFromSourceText] = true nếu từ được chạm nằm trong câu gốc (ngôn ngữ nói);
+  /// = false nếu nằm trong câu đã dịch (ngôn ngữ dịch).
+  /// Nghĩa của từ được TỰ ĐỘNG dịch sẵn (ML Kit, offline, theo chiều ngược lại
+  /// so với ngôn ngữ của từ) để điền vào ô nhập, người dùng vẫn có thể sửa lại
+  /// trước khi lưu.
+  Future<void> _saveWordAsVocabulary(String word, {required bool isFromSourceText}) async {
+    if (word.trim().isEmpty || _sourceLang == null || _targetLang == null) return;
 
-    // Bắt buộc phải có nghĩa/bản dịch đi kèm từ gốc khi thêm vào danh sách từ vựng
+    final wordLang = isFromSourceText ? _sourceLang! : _targetLang!;
+    final meaningLang = isFromSourceText ? _targetLang! : _sourceLang!;
+
     final formKey = GlobalKey<FormState>();
     final meaningController = TextEditingController();
+    bool suggestionStarted = false;
+    bool suggesting = true;
+
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Lưu từ "$word"'),
-        content: Form(
-          key: formKey,
-          child: TextFormField(
-            controller: meaningController,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Nghĩa của từ *'),
-            validator: (v) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập nghĩa của từ' : null,
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) Navigator.pop(context, true);
-            },
-            child: const Text('Lưu'),
-          ),
-        ],
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // Chỉ gọi dịch gợi ý nghĩa đúng 1 lần khi dialog vừa mở
+          if (!suggestionStarted) {
+            suggestionStarted = true;
+            _translateBetween(word, wordLang.code, meaningLang.code).then((suggested) {
+              meaningController.text = suggested;
+              if (context.mounted) setDialogState(() => suggesting = false);
+            }).catchError((_) {
+              if (context.mounted) setDialogState(() => suggesting = false);
+            });
+          }
+
+          return AlertDialog(
+            title: Text('Lưu từ "$word"'),
+            content: Form(
+              key: formKey,
+              child: TextFormField(
+                controller: meaningController,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'Nghĩa của từ *',
+                  helperText: suggesting ? 'Đang gợi ý nghĩa...' : 'Đã tự điền gợi ý, bạn có thể sửa lại',
+                  suffixIcon: suggesting
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: SizedBox(height: 14, width: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                        )
+                      : null,
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập nghĩa của từ' : null,
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+              FilledButton(
+                onPressed: () {
+                  if (formKey.currentState!.validate()) Navigator.pop(context, true);
+                },
+                child: const Text('Lưu'),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (confirmed != true) return;
@@ -236,12 +287,14 @@ class _TranslateScreenState extends State<TranslateScreen> {
       await _vocabularyService.saveVocabulary(
         word: word,
         meaning: meaningController.text.trim(),
-        sourceLanguage: _sourceLang?.code,
-        targetLanguage: _targetLang?.code,
+        sourceLanguage: wordLang.code,
+        targetLanguage: meaningLang.code,
         source: 'conversation',
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Đã lưu "$word" vào từ vựng yêu thích')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã thêm "$word" vào danh sách từ vựng yêu thích')),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lưu từ vựng thất bại: $e')));
@@ -479,7 +532,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Widget _buildResultCard() {
-    final words = _translatedText.split(RegExp(r'\s+'));
+    final sourceWords = _inputController.text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final translatedWords = _translatedText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     return Expanded(
       child: Card(
         child: Padding(
@@ -509,22 +563,54 @@ class _TranslateScreenState extends State<TranslateScreen> {
               const Divider(),
               Expanded(
                 child: SingleChildScrollView(
-                  child: Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: words
-                        .map((w) => ActionChip(
-                              label: Text(w),
-                              onPressed: () => _saveWordAsVocabulary(w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), '')),
-                            ))
-                        .toList(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (sourceWords.isNotEmpty) ...[
+                        Text('Câu gốc (${_sourceLang?.name ?? ''})',
+                            style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: sourceWords
+                              .map((w) => ActionChip(
+                                    label: Text(w),
+                                    onPressed: () => _saveWordAsVocabulary(
+                                      w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''),
+                                      isFromSourceText: true,
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      if (translatedWords.isNotEmpty) ...[
+                        Text('Câu dịch (${_targetLang?.name ?? ''})',
+                            style: const TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: translatedWords
+                              .map((w) => ActionChip(
+                                    label: Text(w),
+                                    onPressed: () => _saveWordAsVocabulary(
+                                      w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''),
+                                      isFromSourceText: false,
+                                    ),
+                                  ))
+                              .toList(),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
               const Padding(
                 padding: EdgeInsets.only(top: 8),
                 child: Text(
-                  'Chạm vào 1 từ để lưu vào từ vựng yêu thích',
+                  'Chạm vào 1 từ (ở câu gốc hoặc câu dịch) để lưu vào từ vựng yêu thích — nghĩa sẽ được điền sẵn, bạn có thể sửa lại',
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
               ),
