@@ -81,15 +81,15 @@ class _TranslateScreenState extends State<TranslateScreen> {
     if (_sessionSegments.isNotEmpty &&
         _sourceLang != null &&
         _targetLang != null) {
-      _historyService
-          .createConversationHistory(
-            sourceLanguage: _sourceLang!.code,
-            targetLanguage: _targetLang!.code,
-            segments: List<HistorySegment>.from(_sessionSegments),
-            startedAt: _sessionStartedAt ?? _sessionSegments.first.at,
-            endedAt: DateTime.now(),
-          )
-          .catchError((_) {});
+      _ignoreHistoryFailure(
+        _historyService.createConversationHistory(
+          sourceLanguage: _sourceLang!.code,
+          targetLanguage: _targetLang!.code,
+          segments: List<HistorySegment>.from(_sessionSegments),
+          startedAt: _sessionStartedAt ?? _sessionSegments.first.at,
+          endedAt: DateTime.now(),
+        ),
+      );
     }
     super.dispose();
   }
@@ -233,15 +233,25 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }) {
     if (_sourceLang == null || _targetLang == null) return;
     // Lưu lịch sử (Online - best effort, không chặn UI nếu lỗi mạng)
-    _historyService
-        .createHistory(
-          sourceLanguage: _sourceLang!.code,
-          targetLanguage: _targetLang!.code,
-          sourceText: sourceText,
-          translatedText: translatedText,
-          type: type,
-        )
-        .catchError((_) {});
+    _ignoreHistoryFailure(
+      _historyService.createHistory(
+        sourceLanguage: _sourceLang!.code,
+        targetLanguage: _targetLang!.code,
+        sourceText: sourceText,
+        translatedText: translatedText,
+        type: type,
+      ),
+    );
+  }
+
+  Future<void> _ignoreHistoryFailure(
+    Future<TranslationHistoryItem> request,
+  ) async {
+    try {
+      await request;
+    } catch (_) {
+      // Lịch sử là best effort và không được chặn luồng dịch chính.
+    }
   }
 
   Future<void> _speak(String text, String? langCode) async {
@@ -475,15 +485,15 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final endedAt = DateTime.now();
       _sessionSegments.clear();
       _sessionStartedAt = null;
-      _historyService
-          .createConversationHistory(
-            sourceLanguage: _sourceLang!.code,
-            targetLanguage: _targetLang!.code,
-            segments: segmentsToSave,
-            startedAt: startedAt,
-            endedAt: endedAt,
-          )
-          .catchError((_) {});
+      _ignoreHistoryFailure(
+        _historyService.createConversationHistory(
+          sourceLanguage: _sourceLang!.code,
+          targetLanguage: _targetLang!.code,
+          segments: segmentsToSave,
+          startedAt: startedAt,
+          endedAt: endedAt,
+        ),
+      );
     }
   }
 
