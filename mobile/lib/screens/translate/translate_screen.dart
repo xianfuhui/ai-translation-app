@@ -61,6 +61,18 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   // Trạng thái chế độ dịch trực tiếp (start/stop)
   bool _isLiveTranslating = false;
+  // true trong lúc _startLiveTranslate() đang xử lý (xin quyền/tải model/mở
+  // mic) - dùng để khoá nút, tránh bấm Dừng xen ngang lúc mic CHƯA thực sự
+  // bật (nếu không, _stopLiveTranslate sẽ no-op vì mic chưa "isListening",
+  // rồi lát sau _startLiveTranslate hoàn tất và mic tự bật lại dù đã bấm Dừng).
+  bool _isStartingLive = false;
+  // Tăng dần mỗi lần bắt đầu/dừng phiên dịch trực tiếp. Dùng để 1 tiến trình
+  // _startLiveTranslate() đang chạy dở tự nhận biết mình đã bị huỷ (người
+  // dùng bấm Dừng giữa chừng) và dừng lại thay vì tiếp tục mở mic.
+  int _liveSessionId = 0;
+  // Đảm bảo các câu nhận diện được dịch + đọc TUẦN TỰ (không chồng chéo) -
+  // nếu người dùng nói liên tục, câu sau phải đợi câu trước xử lý xong.
+  Future<void> _recognitionQueue = Future.value();
   // Gom tất cả các lượt nói trong 1 phiên Bắt đầu -> Dừng để khi Dừng chỉ lưu
   // MỘT mục lịch sử duy nhất (thay vì mỗi câu 1 mục).
   final List<HistorySegment> _sessionSegments = [];
@@ -75,6 +87,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   @override
   void dispose() {
+    _liveSessionId++; // huỷ hiệu lực mọi _startLiveTranslate()/xử lý câu nói đang chạy dở
     _inputController.dispose();
     _tts.stop();
     _translationService.dispose();
@@ -119,6 +132,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
   void initState() {
     super.initState();
     _loadLanguages();
+    // Đợi TTS đọc xong hẳn mới coi speak() là hoàn tất - cần thiết để
+    // "pause mic khi đang đọc, resume khi đọc xong" (xem _onSpeechRecognized)
+    // hoạt động đúng thứ tự thay vì resume mic ngay khi vừa gọi speak().
+    _tts.awaitSpeakCompletion(true);
   }
 
   void _swapLanguages() {
@@ -410,6 +427,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _toggleLiveTranslate() async {
     if (_sourceLang == null || _targetLang == null) return;
+    // Khoá trong lúc _startLiveTranslate() đang xử lý dở (xin quyền/tải model)
+    // - tránh bấm Dừng lúc mic chưa thực sự mở (xem giải thích ở khai báo
+    // _isStartingLive phía trên).
+    if (_isStartingLive) return;
     if (_isLiveTranslating) {
       await _stopLiveTranslate();
     } else {
@@ -420,7 +441,12 @@ class _TranslateScreenState extends State<TranslateScreen> {
   Future<void> _startLiveTranslate() async {
     if (_sourceLang == null) return;
 
+    final mySessionId = ++_liveSessionId;
+    // Còn "hợp lệ" nếu chưa có phiên nào mới hơn được bắt đầu/dừng đè lên.
+    bool isStale() => mySessionId != _liveSessionId;
+
     setState(() {
+      _isStartingLive = true;
       _isLiveTranslating = true;
       _inputController.clear();
       _translatedText = '';
@@ -442,6 +468,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
           'Cần mở backend ít nhất 1 lần để tải cấu hình trước khi dùng offline.',
         );
       }
+      if (isStale()) return; // người dùng đã bấm Dừng trong lúc chờ backend
+
       if (voskModel == null) {
         throw Exception(
           'Chưa có model Vosk nào được cấu hình cho "${_sourceLang!.name}" (thêm ở Web Admin → Ngôn ngữ & Model)',
@@ -457,35 +485,59 @@ class _TranslateScreenState extends State<TranslateScreen> {
         );
       }
 
-      // 2. Tải (nếu cần) + nạp model - có thể mất vài giây/phút lần đầu tùy dung lượng
+      // 2. Tải (nếu cần) + nạp model - có timeout riêng trong VoskService, sẽ
+      // ném lỗi thay vì treo vô thời hạn nếu mạng quá chậm.
       if (mounted) setState(() => _downloadingModelLabel = resolvedVoskModel.name);
-      await _voskService.loadModel(modelUrl);
-      if (mounted) setState(() => _downloadingModelLabel = null);
+      try {
+        await _voskService.loadModel(
+          modelUrl,
+          // Model Vosk có thể khá lớn (nhiều chục MB) và mạng có thể chậm,
+          // 45s mặc định của VoskService là quá ngắn và làm flow bị huỷ giữa
+          // chừng (trông như "treo" ghi âm). Nới ra 3 phút cho đủ thời gian tải.
+          timeout: const Duration(minutes: 3),
+        );
+      } finally {
+        if (mounted) setState(() => _downloadingModelLabel = null);
+      }
+      if (isStale()) return; // người dùng đã bấm Dừng trong lúc tải model
 
-      // 3. Bắt đầu nghe mic thật, tự động dịch mỗi khi nhận diện xong 1 câu
+      // 3. Bắt đầu nghe mic thật, tự động dịch mỗi khi nhận diện xong 1 câu.
+      // Các kết quả nhận diện được đưa vào hàng đợi (_queueSpeechRecognized)
+      // để xử lý TUẦN TỰ, tránh nhiều câu nói liên tục chồng chéo dịch + TTS.
       await _voskService.startListening(
         onPartial: (partialText) {
-          if (mounted) setState(() => _inputController.text = partialText);
+          if (mounted && !isStale()) {
+            setState(() => _inputController.text = partialText);
+          }
         },
-        onResult: (finalText) => _onSpeechRecognized(finalText),
+        onResult: (finalText) => _queueSpeechRecognized(finalText, isStale),
       );
+      if (isStale()) {
+        // Bị Dừng đúng lúc mic vừa mở xong - tắt lại ngay để không "kẹt".
+        await _voskService.stopListening();
+        return;
+      }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLiveTranslating = false;
-          _downloadingModelLabel = null;
-        });
+      if (mounted && !isStale()) {
+        setState(() => _isLiveTranslating = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Không thể bắt đầu dịch trực tiếp: $e')),
         );
       }
+    } finally {
+      if (mounted && !isStale()) setState(() => _isStartingLive = false);
     }
   }
 
   Future<void> _stopLiveTranslate() async {
+    _liveSessionId++; // huỷ hiệu lực mọi _startLiveTranslate() đang chạy dở
     await _voskService.stopListening();
     if (!mounted) return;
-    setState(() => _isLiveTranslating = false);
+    setState(() {
+      _isLiveTranslating = false;
+      _isStartingLive = false;
+      _downloadingModelLabel = null;
+    });
 
     // Kết thúc phiên (Dừng) -> lưu TOÀN BỘ các lượt nói trong phiên này thành
     // 1 mục lịch sử "conversation" duy nhất (không lưu riêng lẻ từng câu nữa).
@@ -509,11 +561,26 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
+  /// Xếp 1 kết quả nhận diện vào hàng đợi xử lý tuần tự. Vosk có thể bắn ra
+  /// nhiều "final result" liên tiếp nếu người dùng nói không ngừng; nếu xử lý
+  /// song song (như cũ), nhiều lượt dịch + đọc TTS chồng lên nhau khiến kết
+  /// quả hiển thị lộn xộn và có cảm giác app bị "khựng". Nối vào 1 Future
+  /// chain đảm bảo câu sau luôn đợi câu trước xử lý (dịch xong + đọc xong)
+  /// rồi mới bắt đầu.
+  void _queueSpeechRecognized(String recognizedText, bool Function() isStale) {
+    _recognitionQueue = _recognitionQueue.then(
+      (_) => _onSpeechRecognized(recognizedText, isStale),
+    );
+  }
+
   /// Được gọi mỗi khi nhận diện được 1 câu hoàn chỉnh trong lúc dịch trực tiếp.
   /// Tự động dịch ngay và cập nhật kết quả; câu này được gom vào phiên hiện tại,
   /// chỉ lưu thành lịch sử khi người dùng bấm Dừng (gộp cả phiên thành 1 mục).
-  Future<void> _onSpeechRecognized(String recognizedText) async {
-    if (recognizedText.trim().isEmpty) return;
+  Future<void> _onSpeechRecognized(
+    String recognizedText,
+    bool Function() isStale,
+  ) async {
+    if (recognizedText.trim().isEmpty || isStale() || !mounted) return;
     setState(() {
       _inputController.text = recognizedText;
       _clearWordSelections();
@@ -521,16 +588,23 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
     try {
       final result = await _translate(recognizedText);
-      if (!mounted) return;
+      if (!mounted || isStale()) return;
       setState(() => _translatedText = result);
       _sessionSegments.add(
         HistorySegment(sourceText: recognizedText, translatedText: result),
       );
 
-      // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
-      _speak(result, _targetLang?.code);
+      // Tạm dừng nhận mic trong lúc đọc to bản dịch, tránh mic tự bắt lại
+      // chính tiếng loa (không có echo-cancellation trên nhiều máy) khiến
+      // Vosk nhận nhầm/loop và trông như bị "treo" giữa chừng.
+      await _voskService.pauseListening();
+      try {
+        await _speak(result, _targetLang?.code);
+      } finally {
+        if (!isStale()) await _voskService.resumeListening();
+      }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || isStale()) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Dịch thất bại: $e')));
@@ -763,7 +837,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
       width: double.infinity,
       height: 56,
       child: FilledButton.icon(
-        onPressed: _toggleLiveTranslate,
+        // Khoá nút trong lúc đang xin quyền/tải model (_isStartingLive) để
+        // tránh bấm Dừng xen ngang lúc mic chưa thực sự mở - xem giải thích
+        // tại khai báo _isStartingLive.
+        onPressed: _isStartingLive ? null : _toggleLiveTranslate,
         style: FilledButton.styleFrom(
           backgroundColor:
               _isLiveTranslating ? AppTheme.cranberry : AppTheme.coral,
@@ -771,16 +848,26 @@ class _TranslateScreenState extends State<TranslateScreen> {
             borderRadius: BorderRadius.circular(17),
           ),
         ),
-        icon: Icon(
-          _isLiveTranslating
-              ? Icons.stop_circle_outlined
-              : Icons.mic_none_rounded,
-          size: 23,
-        ),
+        icon: _isStartingLive
+            ? const SizedBox(
+                height: 18,
+                width: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : Icon(
+                _isLiveTranslating
+                    ? Icons.stop_circle_outlined
+                    : Icons.mic_none_rounded,
+                size: 23,
+              ),
         label: Text(
-          _isLiveTranslating
-              ? 'Dừng nghe & dịch'
-              : 'Bắt đầu dịch bằng giọng nói',
+          _isStartingLive
+              ? (_downloadingModelLabel != null
+                  ? 'Đang tải model "$_downloadingModelLabel"...'
+                  : 'Đang chuẩn bị...')
+              : (_isLiveTranslating
+                  ? 'Dừng nghe & dịch'
+                  : 'Bắt đầu dịch bằng giọng nói'),
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
         ),
       ),
