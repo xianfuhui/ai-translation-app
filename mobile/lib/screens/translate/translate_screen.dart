@@ -3,6 +3,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import '../../core/theme.dart';
 import '../../models/language.dart';
 import '../../models/history.dart';
+import '../../models/model_config.dart';
 import '../../services/language_service.dart';
 import '../../services/history_service.dart';
 import '../../services/vocabulary_service.dart';
@@ -429,24 +430,35 @@ class _TranslateScreenState extends State<TranslateScreen> {
     });
 
     try {
-      // 1. Lấy model Vosk Admin đã cấu hình cho ngôn ngữ nguồn (kể cả file upload thật hoặc link ngoài)
-      final voskModel = await _modelService.getActiveVoskModel(
-        _sourceLang!.code,
-      );
+      // 1. Lấy model Vosk Admin đã cấu hình cho ngôn ngữ nguồn (kể cả file upload thật hoặc link ngoài).
+      // ModelService tự cache lại config này; nếu backend không gọi được (tắt backend/mất
+      // mạng) nhưng máy đã từng lấy thành công trước đó, sẽ tự dùng lại config đã cache.
+      final ModelConfig? voskModel;
+      try {
+        voskModel = await _modelService.getActiveVoskModel(_sourceLang!.code);
+      } catch (_) {
+        throw Exception(
+          'Không kết nối được backend và chưa có cấu hình model nào được lưu sẵn trên máy. '
+          'Cần mở backend ít nhất 1 lần để tải cấu hình trước khi dùng offline.',
+        );
+      }
       if (voskModel == null) {
         throw Exception(
           'Chưa có model Vosk nào được cấu hình cho "${_sourceLang!.name}" (thêm ở Web Admin → Ngôn ngữ & Model)',
         );
       }
-      final modelUrl = _modelService.getDownloadUrl(voskModel);
+      // Gán ra biến non-null riêng: Dart không giữ suy luận non-null của
+      // `voskModel` bên trong closure (setState/callback) phía dưới.
+      final ModelConfig resolvedVoskModel = voskModel;
+      final modelUrl = _modelService.getDownloadUrl(resolvedVoskModel);
       if (modelUrl == null || modelUrl.isEmpty) {
         throw Exception(
-          'Model Vosk "${voskModel.name}" chưa có file hoặc link tải hợp lệ',
+          'Model Vosk "${resolvedVoskModel.name}" chưa có file hoặc link tải hợp lệ',
         );
       }
 
       // 2. Tải (nếu cần) + nạp model - có thể mất vài giây/phút lần đầu tùy dung lượng
-      if (mounted) setState(() => _downloadingModelLabel = voskModel.name);
+      if (mounted) setState(() => _downloadingModelLabel = resolvedVoskModel.name);
       await _voskService.loadModel(modelUrl);
       if (mounted) setState(() => _downloadingModelLabel = null);
 

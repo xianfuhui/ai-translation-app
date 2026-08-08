@@ -43,4 +43,23 @@ class ModelConfig {
       isActive: json['isActive'] ?? true,
     );
   }
+
+  /// Dùng để cache config này xuống máy (xem `ModelService`), phục vụ lúc
+  /// không gọi được backend (offline / tắt backend) nhưng đã từng lấy được
+  /// config này thành công trước đó.
+  Map<String, dynamic> toJson() {
+    return {
+      '_id': id,
+      'type': type,
+      'name': name,
+      'languageCode': languageCode,
+      'identifier': identifier,
+      'downloadUrl': downloadUrl,
+      'fileUrl': fileUrl,
+      'originalFileName': originalFileName,
+      'sizeMB': sizeMB,
+      'description': description,
+      'isActive': isActive,
+    };
+  }
 }
