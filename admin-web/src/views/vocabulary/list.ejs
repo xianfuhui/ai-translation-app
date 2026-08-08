@@ -62,12 +62,13 @@
       <% } else { %>
         <table>
           <thead>
-            <tr><th>Từ</th><th>Nghĩa</th><th>Ngôn ngữ</th><th>Chủ đề</th><th>Hành động</th></tr>
+            <tr><th>Từ</th><th>Phiên âm</th><th>Nghĩa</th><th>Ngôn ngữ</th><th>Chủ đề</th><th>Hành động</th></tr>
           </thead>
           <tbody>
             <% items.forEach(v => { %>
               <tr>
                 <td><%= v.word %></td>
+                <td class="mono"><%= v.phonetic || '—' %></td>
                 <td><%= v.meaning || '—' %></td>
                 <td class="mono"><%= v.sourceLanguage || '?' %> → <%= v.targetLanguage || '?' %></td>
                 <td><%= v.category || '—' %></td>

@@ -174,6 +174,20 @@ class _FlashcardScreenState extends State<FlashcardScreen> {
                       color: _showMeaning ? AppTheme.ivory : AppTheme.moss,
                     ),
                   ),
+                  if (card.phonetic != null && card.phonetic!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      card.phonetic!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontStyle: FontStyle.italic,
+                        fontSize: 15,
+                        color: _showMeaning
+                            ? AppTheme.ivory.withValues(alpha: .8)
+                            : AppTheme.moss.withValues(alpha: .55),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 22),
                   IconButton(
                     tooltip: 'Phát âm',

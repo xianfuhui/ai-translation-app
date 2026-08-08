@@ -2,6 +2,22 @@ const axios = require('axios');
 const Vocabulary = require('../models/Vocabulary');
 const SystemVocabulary = require('../models/SystemVocabulary');
 
+// Tra từ điển online để lấy phiên âm (dấu phát âm) + âm thanh phát âm.
+// Best-effort: không chặn luồng chính nếu tra từ điển lỗi/không tìm thấy.
+const lookupPronunciation = async (word) => {
+  try {
+    const dictRes = await axios.get(`${process.env.DICTIONARY_API_BASE}/en/${encodeURIComponent(word)}`);
+    const entry = dictRes.data?.[0];
+    const phoneticEntry = entry?.phonetics?.find((p) => p.text) || entry?.phonetics?.[0];
+    return {
+      phonetic: entry?.phonetic || phoneticEntry?.text,
+      audioUrl: entry?.phonetics?.find((p) => p.audio)?.audio,
+    };
+  } catch (e) {
+    return { phonetic: undefined, audioUrl: undefined };
+  }
+};
+
 // ===== Từ vựng yêu thích của người dùng (Mobile) =====
 
 // @desc    Lưu từ vựng yêu thích (từ đoạn hội thoại hoặc tự nhập)
@@ -12,18 +28,12 @@ const saveVocabulary = async (req, res, next) => {
     if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
     if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
 
-    // Lấy âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
-    let audioUrl;
-    try {
-      const dictRes = await axios.get(`${process.env.DICTIONARY_API_BASE}/en/${encodeURIComponent(word)}`);
-      audioUrl = dictRes.data?.[0]?.phonetics?.find((p) => p.audio)?.audio;
-    } catch (e) {
-      audioUrl = undefined;
-    }
+    // Lấy phiên âm + âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
+    const { phonetic, audioUrl } = await lookupPronunciation(word);
 
     const vocab = await Vocabulary.findOneAndUpdate(
       { user: req.user._id, word, targetLanguage },
-      { meaning, sourceLanguage, targetLanguage, source: source || 'manual', audioUrl },
+      { meaning, sourceLanguage, targetLanguage, source: source || 'manual', audioUrl, phonetic },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
@@ -104,7 +114,22 @@ const getSystemVocabulary = async (req, res, next) => {
     if (category) filter.category = category;
 
     const list = await SystemVocabulary.find(filter).sort({ createdAt: -1 });
-    res.json(list);
+
+    // Đánh dấu những từ đã có trong sổ tay cá nhân của user để hiển thị trạng thái "đã thêm"
+    const myWords = await Vocabulary.find({ user: req.user._id }).select('word targetLanguage');
+    const mySet = new Set(
+      myWords.map((v) => `${v.word.trim().toLowerCase()}|${(v.targetLanguage || '').toLowerCase()}`)
+    );
+
+    const result = list.map((item) => {
+      const obj = item.toObject();
+      obj.inMyVocabulary = mySet.has(
+        `${item.word.trim().toLowerCase()}|${(item.targetLanguage || '').toLowerCase()}`
+      );
+      return obj;
+    });
+
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -118,7 +143,10 @@ const createSystemVocabulary = async (req, res, next) => {
     if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
     if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
 
-    const item = await SystemVocabulary.create({ ...req.body, createdBy: req.user._id });
+    // Lấy phiên âm + âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
+    const { phonetic, audioUrl } = await lookupPronunciation(word);
+
+    const item = await SystemVocabulary.create({ ...req.body, phonetic, audioUrl, createdBy: req.user._id });
     res.status(201).json(item);
   } catch (error) {
     next(error);
@@ -129,7 +157,15 @@ const createSystemVocabulary = async (req, res, next) => {
 // @route   PUT /api/vocabulary/system/:id
 const updateSystemVocabulary = async (req, res, next) => {
   try {
-    const item = await SystemVocabulary.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const updates = { ...req.body };
+    // Nếu từ vựng thay đổi, tra lại phiên âm + âm thanh phát âm
+    if (updates.word) {
+      const { phonetic, audioUrl } = await lookupPronunciation(updates.word);
+      updates.phonetic = phonetic;
+      updates.audioUrl = audioUrl;
+    }
+
+    const item = await SystemVocabulary.findByIdAndUpdate(req.params.id, updates, { new: true });
     if (!item) return res.status(404).json({ message: 'Không tìm thấy từ vựng hệ thống' });
     res.json(item);
   } catch (error) {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import '../../core/theme.dart';
 import '../../models/vocabulary.dart';
 import '../../services/vocabulary_service.dart';
@@ -14,6 +15,7 @@ class VocabularyScreen extends StatefulWidget {
 class _VocabularyScreenState extends State<VocabularyScreen>
     with SingleTickerProviderStateMixin {
   final _service = VocabularyService();
+  final _tts = FlutterTts();
   late TabController _tabController;
 
   List<VocabularyItem> _myVocab = [];
@@ -30,7 +32,12 @@ class _VocabularyScreenState extends State<VocabularyScreen>
   @override
   void dispose() {
     _tabController.dispose();
+    _tts.stop();
     super.dispose();
+  }
+
+  Future<void> _speak(String word) async {
+    await _tts.speak(word);
   }
 
   Future<void> _loadData() async {
@@ -280,14 +287,43 @@ class _VocabularyScreenState extends State<VocabularyScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    item.word,
-                    style: const TextStyle(
-                      fontFamily: 'serif',
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        item.word,
+                        style: const TextStyle(
+                          fontFamily: 'serif',
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => _speak(item.word),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.volume_up_rounded,
+                            size: 18,
+                            color: AppTheme.coral.withValues(alpha: .85),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                  if (item.phonetic != null && item.phonetic!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      item.phonetic!,
+                      style: TextStyle(
+                        fontStyle: FontStyle.italic,
+                        color: AppTheme.moss.withValues(alpha: .55),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 3),
                   Text(
                     item.meaning?.isNotEmpty == true
@@ -334,7 +370,16 @@ class _VocabularyScreenState extends State<VocabularyScreen>
                 ),
                 onPressed: () => _deleteVocab(item),
               ),
-            ] else
+            ] else if (item.inMyVocabulary)
+              IconButton(
+                tooltip: 'Đã có trong sổ tay của tôi',
+                icon: Icon(
+                  Icons.bookmark_added_rounded,
+                  color: AppTheme.moss.withValues(alpha: .55),
+                ),
+                onPressed: null,
+              )
+            else
               IconButton(
                 tooltip: 'Lưu vào sổ tay',
                 icon: const Icon(

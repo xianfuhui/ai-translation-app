@@ -7,6 +7,9 @@ class VocabularyItem {
   final String source; // 'conversation' | 'manual'
   final bool inFlashcard;
   final String? audioUrl;
+  final String? phonetic; // phiên âm (dấu phát âm), vd: /wɜːrd/
+  // Chỉ có ý nghĩa với từ trong Kho hệ thống: từ này đã có trong sổ tay của tôi chưa
+  final bool inMyVocabulary;
 
   VocabularyItem({
     required this.id,
@@ -17,6 +20,8 @@ class VocabularyItem {
     this.source = 'manual',
     this.inFlashcard = false,
     this.audioUrl,
+    this.phonetic,
+    this.inMyVocabulary = false,
   });
 
   factory VocabularyItem.fromJson(Map<String, dynamic> json) {
@@ -29,6 +34,8 @@ class VocabularyItem {
       source: json['source'] ?? 'manual',
       inFlashcard: json['inFlashcard'] ?? false,
       audioUrl: json['audioUrl'],
+      phonetic: json['phonetic'],
+      inMyVocabulary: json['inMyVocabulary'] ?? false,
     );
   }
 }

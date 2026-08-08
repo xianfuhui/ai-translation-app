@@ -8,6 +8,8 @@ const systemVocabularySchema = new mongoose.Schema(
     targetLanguage: { type: String, trim: true },
     category: { type: String, trim: true }, // vd: chủ đề (du lịch, công việc...)
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // admin tạo
+    audioUrl: { type: String }, // âm thanh phát âm lấy từ từ điển online
+    phonetic: { type: String }, // phiên âm (dấu phát âm), vd: /wɜːrd/, lấy từ từ điển online
   },
   { timestamps: true }
 );

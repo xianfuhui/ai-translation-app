@@ -40,14 +40,14 @@ async function run() {
 
   // ===== 3. Kho từ vựng hệ thống =====
   const systemWords = [
-    { word: 'hello', meaning: 'xin chào', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
-    { word: 'thank you', meaning: 'cảm ơn', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
-    { word: 'airport', meaning: 'sân bay', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
-    { word: 'passport', meaning: 'hộ chiếu', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
-    { word: 'meeting', meaning: 'cuộc họp', sourceLanguage: 'en', targetLanguage: 'vi', category: 'công việc' },
-    { word: 'deadline', meaning: 'hạn chót', sourceLanguage: 'en', targetLanguage: 'vi', category: 'công việc' },
-    { word: 'ありがとう', meaning: 'cảm ơn', sourceLanguage: 'ja', targetLanguage: 'vi', category: 'giao tiếp' },
-    { word: 'こんにちは', meaning: 'xin chào', sourceLanguage: 'ja', targetLanguage: 'vi', category: 'giao tiếp' },
+    { word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
+    { word: 'thank you', meaning: 'cảm ơn', phonetic: '/θæŋk juː/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
+    { word: 'airport', meaning: 'sân bay', phonetic: '/ˈeərpɔːrt/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
+    { word: 'passport', meaning: 'hộ chiếu', phonetic: '/ˈpæspɔːrt/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
+    { word: 'meeting', meaning: 'cuộc họp', phonetic: '/ˈmiːtɪŋ/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'công việc' },
+    { word: 'deadline', meaning: 'hạn chót', phonetic: '/ˈdedlaɪn/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'công việc' },
+    { word: 'ありがとう', meaning: 'cảm ơn', phonetic: 'arigatou', sourceLanguage: 'ja', targetLanguage: 'vi', category: 'giao tiếp' },
+    { word: 'こんにちは', meaning: 'xin chào', phonetic: 'konnichiwa', sourceLanguage: 'ja', targetLanguage: 'vi', category: 'giao tiếp' },
   ];
   await SystemVocabulary.deleteMany({ word: { $in: systemWords.map((w) => w.word) } });
   const systemVocab = await SystemVocabulary.insertMany(
@@ -58,9 +58,9 @@ async function run() {
   // ===== 4. Từ vựng yêu thích của user1 =====
   await Vocabulary.deleteMany({ user: user1._id });
   const myVocab = await Vocabulary.insertMany([
-    { user: user1._id, word: 'hello', meaning: 'xin chào', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: true },
-    { user: user1._id, word: 'beautiful', meaning: 'xinh đẹp', sourceLanguage: 'en', targetLanguage: 'vi', source: 'conversation', inFlashcard: true },
-    { user: user1._id, word: 'journey', meaning: 'hành trình', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: false },
+    { user: user1._id, word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: true },
+    { user: user1._id, word: 'beautiful', meaning: 'xinh đẹp', phonetic: '/ˈbjuːtɪfəl/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'conversation', inFlashcard: true },
+    { user: user1._id, word: 'journey', meaning: 'hành trình', phonetic: '/ˈdʒɜːrni/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: false },
   ]);
   console.log(`✅ Đã tạo ${myVocab.length} từ vựng yêu thích cho ${user1.email}`);
 

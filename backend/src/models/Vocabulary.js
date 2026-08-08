@@ -12,6 +12,7 @@ const vocabularySchema = new mongoose.Schema(
     // Đánh dấu đã thêm vào Flashcard để luyện tập chưa
     inFlashcard: { type: Boolean, default: false },
     audioUrl: { type: String }, // âm thanh phát âm lấy từ từ điển online
+    phonetic: { type: String }, // phiên âm (dấu phát âm), vd: /wɜːrd/, lấy từ từ điển online
   },
   { timestamps: true }
 );
