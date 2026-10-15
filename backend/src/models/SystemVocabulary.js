@@ -14,4 +14,7 @@ const systemVocabularySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// GET /api/vocabulary/system?category=...: lọc theo chủ đề + sort({createdAt:-1})
+systemVocabularySchema.index({ category: 1, createdAt: -1 });
+
 module.exports = mongoose.model('SystemVocabulary', systemVocabularySchema);

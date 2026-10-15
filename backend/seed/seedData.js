@@ -31,16 +31,19 @@ async function run() {
 
   // ===== 2. Tài khoản demo (2 user thường) =====
   await User.deleteMany({ email: { $in: DEMO_USER_EMAILS } });
+  // lastLoginAt có mặt để schema hiện ĐỦ field khi sample document (Compass/Hackolade
+  // vẽ diagram từ dữ liệu thật — field vắng mặt trong mọi doc sẽ biến mất khỏi diagram).
   const users = await User.create([
-    { fullName: 'Nguyễn Văn A', email: DEMO_USER_EMAILS[0], password: 'User@123', role: 'user' },
-    { fullName: 'Trần Thị B', email: DEMO_USER_EMAILS[1], password: 'User@123', role: 'user' },
+    { fullName: 'Nguyễn Văn A', email: DEMO_USER_EMAILS[0], password: 'User@123', role: 'user', lastLoginAt: new Date(Date.now() - 1000 * 60 * 60 * 2) },
+    { fullName: 'Trần Thị B', email: DEMO_USER_EMAILS[1], password: 'User@123', role: 'user', lastLoginAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 6) },
   ]);
   console.log(`✅ Đã tạo ${users.length} tài khoản user demo (mật khẩu: User@123)`);
   const [user1, user2] = users;
 
   // ===== 3. Kho từ vựng hệ thống =====
+  // Từ có audioUrl thật (dictionaryapi.dev) để field này hiện trong schema sampling
   const systemWords = [
-    { word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
+    { word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', audioUrl: 'https://api.dictionaryapi.dev/media/pronunciations/en/hello-us.mp3', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
     { word: 'thank you', meaning: 'cảm ơn', phonetic: '/θæŋk juː/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'giao tiếp' },
     { word: 'airport', meaning: 'sân bay', phonetic: '/ˈeərpɔːrt/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
     { word: 'passport', meaning: 'hộ chiếu', phonetic: '/ˈpæspɔːrt/', sourceLanguage: 'en', targetLanguage: 'vi', category: 'du lịch' },
@@ -50,15 +53,18 @@ async function run() {
     { word: 'こんにちは', meaning: 'xin chào', phonetic: 'konnichiwa', sourceLanguage: 'ja', targetLanguage: 'vi', category: 'giao tiếp' },
   ];
   await SystemVocabulary.deleteMany({ word: { $in: systemWords.map((w) => w.word) } });
+  // createdBy trỏ vào admin thật (nếu đã seed:admin) — có ObjectId thật thì Compass
+  // Data Modeling mới tự dò ra được quan hệ systemvocabularies -> users.
+  const admin = await User.findOne({ email: 'admin@example.com' });
   const systemVocab = await SystemVocabulary.insertMany(
-    systemWords.map((w) => ({ ...w, createdBy: null }))
+    systemWords.map((w) => ({ ...w, createdBy: admin?._id ?? null }))
   );
   console.log(`✅ Đã tạo ${systemVocab.length} từ vựng trong kho hệ thống`);
 
   // ===== 4. Từ vựng yêu thích của user1 =====
   await Vocabulary.deleteMany({ user: user1._id });
   const myVocab = await Vocabulary.insertMany([
-    { user: user1._id, word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: true },
+    { user: user1._id, word: 'hello', meaning: 'xin chào', phonetic: '/həˈloʊ/', audioUrl: 'https://api.dictionaryapi.dev/media/pronunciations/en/hello-us.mp3', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: true },
     { user: user1._id, word: 'beautiful', meaning: 'xinh đẹp', phonetic: '/ˈbjuːtɪfəl/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'conversation', inFlashcard: true },
     { user: user1._id, word: 'journey', meaning: 'hành trình', phonetic: '/ˈdʒɜːrni/', sourceLanguage: 'en', targetLanguage: 'vi', source: 'manual', inFlashcard: false },
   ]);
@@ -108,6 +114,8 @@ async function run() {
       startedAt: new Date(now - 1000 * 60 * 60 * 5),
       endedAt: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 50),
       createdAt: new Date(now - 1000 * 60 * 60 * 5 + 1000 * 50),
+      // summary có mặt để field hiện đủ trong schema sampling
+      summary: 'Phiên hội thoại chào hỏi ngắn trước khi bắt đầu cuộc họp, 3 lượt nói Anh-Việt.',
     },
   ]);
   console.log(`✅ Đã tạo ${history.length} bản ghi lịch sử dịch thuật`);
@@ -137,6 +145,10 @@ async function run() {
     { type: 'mlkit', name: 'ML Kit English', languageCode: 'en', identifier: 'en', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
     { type: 'mlkit', name: 'ML Kit Vietnamese', languageCode: 'vi', identifier: 'vi', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
     { type: 'mlkit', name: 'ML Kit Japanese', languageCode: 'ja', identifier: 'ja', sizeMB: 30, description: 'Tự tải khi cần, ~30MB', isActive: true },
+    // Model demo "admin upload trực tiếp" — để fileName/originalFileName hiện trong
+    // schema sampling. Gắn vào 'ko' (ngôn ngữ đang tắt) + isActive:false nên mobile
+    // không bao giờ query trúng, không ảnh hưởng app.
+    { type: 'vosk', name: 'Vosk Korean Small (admin upload)', languageCode: 'ko', identifier: 'vosk-model-small-ko-0.22', sizeMB: 82, fileName: 'vosk-ko-0.22-8f3a1c.zip', originalFileName: 'vosk-model-small-ko-0.22.zip', description: 'Demo file model do admin upload', isActive: false },
   ];
   await Model.deleteMany({ identifier: { $in: modelData.map((m) => m.identifier) } });
   const models = await Model.insertMany(modelData);

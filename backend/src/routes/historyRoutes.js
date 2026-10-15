@@ -4,6 +4,7 @@ const {
   createHistory,
   getMyHistory,
   deleteMyHistory,
+  deleteMySegment,
   summarizeHistory,
   getAllHistoryAdmin,
   deleteHistoryAdmin,
@@ -16,6 +17,7 @@ router.use(protect);
 router.post('/', createHistory);
 router.get('/', getMyHistory);
 router.post('/:id/summarize', summarizeHistory);
+router.delete('/:id/segments', deleteMySegment);
 router.delete('/:id', deleteMyHistory);
 
 // Quản lý lịch sử toàn hệ thống (Web Admin)

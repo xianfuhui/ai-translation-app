@@ -14,7 +14,7 @@ class HistorySegment {
   Map<String, dynamic> toJson() => {
         'sourceText': sourceText,
         'translatedText': translatedText,
-        'at': at.toIso8601String(),
+        'at': at.toUtc().toIso8601String(),
       };
 }
 
@@ -69,4 +69,19 @@ class TranslationHistoryItem {
       createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
     );
   }
+
+  /// Local cache format (same field names as the server documents).
+  Map<String, dynamic> toJson() => {
+        '_id': id,
+        'sourceLanguage': sourceLanguage,
+        'targetLanguage': targetLanguage,
+        'sourceText': sourceText,
+        'translatedText': translatedText,
+        'type': type,
+        'segments': segments.map((s) => s.toJson()).toList(),
+        'startedAt': startedAt?.toUtc().toIso8601String(),
+        'endedAt': endedAt?.toUtc().toIso8601String(),
+        'summary': summary,
+        'createdAt': createdAt.toUtc().toIso8601String(),
+      };
 }

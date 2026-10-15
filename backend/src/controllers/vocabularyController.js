@@ -1,22 +1,6 @@
-const axios = require('axios');
 const Vocabulary = require('../models/Vocabulary');
 const SystemVocabulary = require('../models/SystemVocabulary');
-
-// Tra từ điển online để lấy phiên âm (dấu phát âm) + âm thanh phát âm.
-// Best-effort: không chặn luồng chính nếu tra từ điển lỗi/không tìm thấy.
-const lookupPronunciation = async (word) => {
-  try {
-    const dictRes = await axios.get(`${process.env.DICTIONARY_API_BASE}/en/${encodeURIComponent(word)}`);
-    const entry = dictRes.data?.[0];
-    const phoneticEntry = entry?.phonetics?.find((p) => p.text) || entry?.phonetics?.[0];
-    return {
-      phonetic: entry?.phonetic || phoneticEntry?.text,
-      audioUrl: entry?.phonetics?.find((p) => p.audio)?.audio,
-    };
-  } catch (e) {
-    return { phonetic: undefined, audioUrl: undefined };
-  }
-};
+const xlsx = require('xlsx');
 
 // ===== Từ vựng yêu thích của người dùng (Mobile) =====
 
@@ -28,12 +12,9 @@ const saveVocabulary = async (req, res, next) => {
     if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
     if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
 
-    // Lấy phiên âm + âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
-    const { phonetic, audioUrl } = await lookupPronunciation(word);
-
     const vocab = await Vocabulary.findOneAndUpdate(
       { user: req.user._id, word, targetLanguage },
-      { meaning, sourceLanguage, targetLanguage, source: source || 'manual', audioUrl, phonetic },
+      { meaning, sourceLanguage, targetLanguage, source: source || 'manual' },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
@@ -137,16 +118,14 @@ const getSystemVocabulary = async (req, res, next) => {
 
 // @desc    Admin thêm từ vựng hệ thống
 // @route   POST /api/vocabulary/system
+// Body: word, meaning, sourceLanguage, targetLanguage, category, phonetic, audioUrl
 const createSystemVocabulary = async (req, res, next) => {
   try {
     const { word, meaning } = req.body;
     if (!word || !word.trim()) return res.status(400).json({ message: 'Vui lòng nhập từ vựng' });
     if (!meaning || !meaning.trim()) return res.status(400).json({ message: 'Vui lòng nhập nghĩa của từ vựng' });
 
-    // Lấy phiên âm + âm thanh phát âm từ từ điển online (best-effort, không chặn nếu lỗi)
-    const { phonetic, audioUrl } = await lookupPronunciation(word);
-
-    const item = await SystemVocabulary.create({ ...req.body, phonetic, audioUrl, createdBy: req.user._id });
+    const item = await SystemVocabulary.create({ ...req.body, createdBy: req.user._id });
     res.status(201).json(item);
   } catch (error) {
     next(error);
@@ -157,15 +136,7 @@ const createSystemVocabulary = async (req, res, next) => {
 // @route   PUT /api/vocabulary/system/:id
 const updateSystemVocabulary = async (req, res, next) => {
   try {
-    const updates = { ...req.body };
-    // Nếu từ vựng thay đổi, tra lại phiên âm + âm thanh phát âm
-    if (updates.word) {
-      const { phonetic, audioUrl } = await lookupPronunciation(updates.word);
-      updates.phonetic = phonetic;
-      updates.audioUrl = audioUrl;
-    }
-
-    const item = await SystemVocabulary.findByIdAndUpdate(req.params.id, updates, { new: true });
+    const item = await SystemVocabulary.findByIdAndUpdate(req.params.id, { ...req.body }, { new: true });
     if (!item) return res.status(404).json({ message: 'Không tìm thấy từ vựng hệ thống' });
     res.json(item);
   } catch (error) {
@@ -185,6 +156,81 @@ const deleteSystemVocabulary = async (req, res, next) => {
   }
 };
 
+// @desc    Lấy danh sách chủ đề (categories) có trong kho từ vựng hệ thống
+// @route   GET /api/vocabulary/system/categories
+const getSystemCategories = async (req, res, next) => {
+  try {
+    const categories = await SystemVocabulary.distinct('category', {
+      category: { $exists: true, $ne: null, $ne: '' },
+    });
+    res.json(categories.sort());
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Admin import từ vựng hệ thống từ file Excel
+// @route   POST /api/vocabulary/system/import
+// Columns (header row): word, meaning, sourceLanguage, targetLanguage, category, phonetic, audioUrl
+// "word" và "meaning" là bắt buộc; các cột còn lại tùy chọn.
+// Nếu từ đã tồn tại (word + targetLanguage) thì bỏ qua (không ghi đè).
+const importSystemVocabulary = async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Vui lòng tải lên file Excel (.xlsx, .xls)' });
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+
+    if (!rows.length) return res.status(400).json({ message: 'File Excel không có dữ liệu' });
+
+    const ALLOWED = ['word', 'meaning', 'sourceLanguage', 'targetLanguage', 'category', 'phonetic', 'audioUrl'];
+
+    const errors = [];
+    const toInsert = [];
+
+    rows.forEach((row, i) => {
+      const rowNum = i + 2; // +2 vì row 1 là header
+      const word = String(row.word || '').trim();
+      const meaning = String(row.meaning || '').trim();
+      if (!word) { errors.push(`Dòng ${rowNum}: thiếu "word"`); return; }
+      if (!meaning) { errors.push(`Dòng ${rowNum}: thiếu "meaning"`); return; }
+
+      const doc = { createdBy: req.user._id };
+      ALLOWED.forEach((key) => {
+        const val = String(row[key] || '').trim();
+        if (val) doc[key] = val;
+      });
+      toInsert.push(doc);
+    });
+
+    if (errors.length && !toInsert.length) {
+      return res.status(400).json({ message: 'File có lỗi dữ liệu', errors });
+    }
+
+    // insertMany với ordered:false để bỏ qua duplicate (unique index word+targetLanguage nếu có)
+    // Dùng upsert riêng từng cái để đảm bảo không ghi đè dữ liệu cũ
+    let inserted = 0;
+    let skipped = 0;
+    for (const doc of toInsert) {
+      const filter = { word: doc.word, targetLanguage: doc.targetLanguage || '' };
+      const existing = await SystemVocabulary.findOne(filter);
+      if (existing) { skipped++; continue; }
+      await SystemVocabulary.create(doc);
+      inserted++;
+    }
+
+    res.json({
+      message: `Import thành công: ${inserted} từ mới, ${skipped} từ đã tồn tại bị bỏ qua.`,
+      inserted,
+      skipped,
+      errors: errors.length ? errors : undefined,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   saveVocabulary,
   getMyVocabulary,
@@ -195,4 +241,6 @@ module.exports = {
   createSystemVocabulary,
   updateSystemVocabulary,
   deleteSystemVocabulary,
+  getSystemCategories,
+  importSystemVocabulary,
 };

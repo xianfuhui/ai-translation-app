@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
-import '../core/theme.dart';
 import 'translate/translate_screen.dart';
+import 'history/history_screen.dart';
 import 'ai/ai_chat_screen.dart';
 import 'vocabulary/vocabulary_screen.dart';
-import 'history/history_screen.dart';
 import 'profile/profile_screen.dart';
 
+/// Shell 5 tab: Dịch · Lịch sử · AI · Sổ tay · Cá nhân.
+/// - Mở app là vào thẳng tab Dịch.
+/// - Lịch sử có tab riêng (không còn mục "Gần đây" trong tab Dịch).
 class HomeScreen extends StatefulWidget {
   final int initialIndex;
 
@@ -13,6 +15,19 @@ class HomeScreen extends StatefulWidget {
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
+}
+
+/// Cho màn con đổi tab (vd: avatar ở màn Dịch → tab Cá nhân).
+class HomeTabs extends InheritedWidget {
+  final void Function(int index) select;
+
+  const HomeTabs({super.key, required this.select, required super.child});
+
+  static HomeTabs? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<HomeTabs>();
+
+  @override
+  bool updateShouldNotify(HomeTabs oldWidget) => false;
 }
 
 class _HomeScreenState extends State<HomeScreen> {
@@ -26,91 +41,44 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final _screens = const [
     TranslateScreen(),
+    HistoryScreen(),
     AIChatScreen(),
     VocabularyScreen(),
-    HistoryScreen(),
     ProfileScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(index: _index, children: _screens),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (index) => setState(() => _index = index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.translate_rounded),
-            label: 'Dịch',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.auto_awesome_outlined),
-            label: 'AI',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bookmark_outline_rounded),
-            label: 'Từ vựng',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_rounded),
-            label: 'Lịch sử',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            label: 'Cá nhân',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class ScreenIntro extends StatelessWidget {
-  final String eyebrow;
-  final String title;
-  final String? description;
-
-  const ScreenIntro({
-    super.key,
-    required this.eyebrow,
-    required this.title,
-    this.description,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppTheme.spaceMd,
-        10,
-        AppTheme.spaceMd,
-        18,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            eyebrow.toUpperCase(),
-            style: const TextStyle(
-              color: AppTheme.coral,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.4,
+    return HomeTabs(
+      select: (index) => setState(() => _index = index.clamp(0, 4)),
+      child: Scaffold(
+        body: IndexedStack(index: _index, children: _screens),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: (index) => setState(() => _index = index),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.translate_rounded),
+              label: 'Dịch',
             ),
-          ),
-          const SizedBox(height: 5),
-          Text(title, style: Theme.of(context).textTheme.headlineSmall),
-          if (description != null) ...[
-            const SizedBox(height: 5),
-            Text(
-              description!,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppTheme.moss.withValues(alpha: .65),
-                  ),
+            NavigationDestination(
+              icon: Icon(Icons.history_rounded),
+              label: 'Lịch sử',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.auto_awesome_outlined),
+              label: 'AI',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.bookmark_outline_rounded),
+              label: 'Sổ tay',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline_rounded),
+              label: 'Cá nhân',
             ),
           ],
-        ],
+        ),
       ),
     );
   }

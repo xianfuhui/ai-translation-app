@@ -1,8 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'constants.dart';
 import 'api_exception.dart';
+import 'backend_status.dart';
+import 'session.dart';
 
 /// Client HTTP dùng chung cho toàn bộ ứng dụng.
 /// Tự động đính kèm JWT token (nếu có) vào header Authorization.
@@ -12,6 +16,10 @@ class ApiClient {
   ApiClient._internal();
 
   final _storage = const FlutterSecureStorage();
+
+  /// Short on purpose: when the server is unreachable the UI must fall back to
+  /// local data quickly. Slow endpoints (LLM) pass a longer [timeout].
+  static const _defaultTimeout = Duration(seconds: 8);
 
   Future<String?> get token async => _storage.read(key: AppConstants.tokenKey);
 
@@ -32,7 +40,14 @@ class ApiClient {
   }
 
   dynamic _handleResponse(http.Response res) {
-    final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
+    dynamic body;
+    if (res.body.isNotEmpty) {
+      try {
+        body = jsonDecode(res.body);
+      } catch (_) {
+        body = null; // e.g. an HTML error page from a proxy
+      }
+    }
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body;
     }
@@ -42,24 +57,71 @@ class ApiClient {
     throw ApiException(message, statusCode: res.statusCode);
   }
 
-  Future<dynamic> get(String path, {Map<String, dynamic>? query, bool auth = true}) async {
-    final res = await http.get(_uri(path, query), headers: await _headers(withAuth: auth));
+  /// Sends one request with offline handling:
+  /// - guests never call protected endpoints (fail fast as [NetworkException]);
+  /// - while the backend is known to be down, fail fast instead of waiting;
+  /// - socket errors / timeouts / gateway errors become [NetworkException].
+  Future<dynamic> _request(
+    bool auth,
+    Duration? timeout,
+    Future<http.Response> Function(Map<String, String> headers) send,
+  ) async {
+    if (auth && AppSession.isGuest) {
+      throw NetworkException(
+        'Bạn đang dùng chế độ khách. Đăng nhập để dùng tính năng cần máy chủ.',
+        true,
+      );
+    }
+    if (BackendStatus.isBlocked) throw NetworkException();
+
+    final headers = await _headers(withAuth: auth);
+    final http.Response res;
+    try {
+      res = await send(headers).timeout(timeout ?? _defaultTimeout);
+    } on TimeoutException {
+      BackendStatus.reportFailure();
+      throw NetworkException();
+    } on IOException {
+      BackendStatus.reportFailure();
+      throw NetworkException();
+    } on http.ClientException {
+      BackendStatus.reportFailure();
+      throw NetworkException();
+    }
+
+    if (res.statusCode == 502 || res.statusCode == 503 || res.statusCode == 504) {
+      BackendStatus.reportFailure();
+      throw NetworkException();
+    }
+    BackendStatus.reportSuccess();
     return _handleResponse(res);
   }
 
-  Future<dynamic> post(String path, {Object? body, bool auth = true}) async {
-    final res = await http.post(_uri(path), headers: await _headers(withAuth: auth), body: jsonEncode(body ?? {}));
-    return _handleResponse(res);
+  Future<dynamic> get(String path,
+      {Map<String, dynamic>? query, bool auth = true, Duration? timeout}) {
+    return _request(auth, timeout, (h) => http.get(_uri(path, query), headers: h));
   }
 
-  Future<dynamic> put(String path, {Object? body, bool auth = true}) async {
-    final res = await http.put(_uri(path), headers: await _headers(withAuth: auth), body: jsonEncode(body ?? {}));
-    return _handleResponse(res);
+  Future<dynamic> post(String path,
+      {Object? body, bool auth = true, Duration? timeout}) {
+    return _request(
+      auth,
+      timeout,
+      (h) => http.post(_uri(path), headers: h, body: jsonEncode(body ?? {})),
+    );
   }
 
-  Future<dynamic> delete(String path, {bool auth = true}) async {
-    final res = await http.delete(_uri(path), headers: await _headers(withAuth: auth));
-    return _handleResponse(res);
+  Future<dynamic> put(String path,
+      {Object? body, bool auth = true, Duration? timeout}) {
+    return _request(
+      auth,
+      timeout,
+      (h) => http.put(_uri(path), headers: h, body: jsonEncode(body ?? {})),
+    );
+  }
+
+  Future<dynamic> delete(String path, {bool auth = true, Duration? timeout}) {
+    return _request(auth, timeout, (h) => http.delete(_uri(path), headers: h));
   }
 
   Future<void> saveSession(String token, Map<String, dynamic> user) async {

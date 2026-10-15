@@ -13,35 +13,122 @@
       </div>
     </div>
 
+    <!-- ── TABS ─────────────────────────────────────────────────── -->
     <div class="panel">
-      <h2>Thêm từ vựng mới</h2>
-      <form method="POST" action="/vocabulary">
-        <div class="form-row">
-          <div class="form-group">
-            <label for="word">Từ vựng</label>
-            <input type="text" id="word" name="word" required />
-          </div>
-          <div class="form-group">
-            <label for="meaning">Nghĩa</label>
-            <input type="text" id="meaning" name="meaning" required />
-          </div>
-          <div class="form-group">
-            <label for="sourceLanguage">Ngôn ngữ gốc</label>
-            <input type="text" id="sourceLanguage" name="sourceLanguage" placeholder="vd: en" />
-          </div>
-          <div class="form-group">
-            <label for="targetLanguage">Ngôn ngữ đích</label>
-            <input type="text" id="targetLanguage" name="targetLanguage" placeholder="vd: vi" />
-          </div>
-          <div class="form-group">
-            <label for="category">Chủ đề</label>
-            <input type="text" id="category" name="category" placeholder="vd: du lịch" />
-          </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Thêm từ vựng</button>
-      </form>
-    </div>
+      <div class="tab-bar" style="display:flex;gap:0;border-bottom:2px solid var(--border,#e5e7eb);margin-bottom:1.25rem;">
+        <button class="tab-btn active" data-tab="tab-single"
+          style="padding:.5rem 1.25rem;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-2px;color:inherit;"
+          onclick="switchTab('tab-single',this)">Thêm một từ</button>
+        <button class="tab-btn" data-tab="tab-excel"
+          style="padding:.5rem 1.25rem;border:none;background:none;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-2px;color:inherit;opacity:.6;"
+          onclick="switchTab('tab-excel',this)">Import Excel</button>
+      </div>
 
+      <!-- Tab 1: Thêm một từ -->
+      <div id="tab-single">
+        <h2 style="margin-top:0">Thêm từ vựng mới</h2>
+        <form method="POST" action="/vocabulary">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="word">Từ vựng <span style="color:red">*</span></label>
+              <input type="text" id="word" name="word" required />
+            </div>
+            <div class="form-group">
+              <label for="meaning">Nghĩa <span style="color:red">*</span></label>
+              <input type="text" id="meaning" name="meaning" required />
+            </div>
+            <div class="form-group">
+              <label for="phonetic">Phiên âm</label>
+              <input type="text" id="phonetic" name="phonetic" placeholder="vd: /wɜːrd/" />
+            </div>
+            <div class="form-group">
+              <label for="audioUrl">Link audio phiên âm</label>
+              <input type="url" id="audioUrl" name="audioUrl" placeholder="https://..." />
+            </div>
+            <div class="form-group">
+              <label for="sourceLanguage">Ngôn ngữ gốc</label>
+              <input type="text" id="sourceLanguage" name="sourceLanguage" placeholder="vd: en" />
+            </div>
+            <div class="form-group">
+              <label for="targetLanguage">Ngôn ngữ đích</label>
+              <input type="text" id="targetLanguage" name="targetLanguage" placeholder="vd: vi" />
+            </div>
+            <div class="form-group">
+              <label for="category">Chủ đề</label>
+              <input type="text" id="category" name="category" placeholder="vd: du lịch" />
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary">Thêm từ vựng</button>
+        </form>
+      </div>
+
+      <!-- Tab 2: Import Excel -->
+      <div id="tab-excel" style="display:none">
+        <h2 style="margin-top:0">Import từ file Excel</h2>
+
+        <% if (importResult) { %>
+          <div style="margin-bottom:1rem;padding:.75rem 1rem;border-radius:6px;
+            background:<%= importResult.error ? '#fef2f2' : '#f0fdf4' %>;
+            border:1px solid <%= importResult.error ? '#fca5a5' : '#86efac' %>;
+            color:<%= importResult.error ? '#991b1b' : '#166534' %>;">
+            <%= importResult.message %>
+            <% if (importResult.errors && importResult.errors.length) { %>
+              <ul style="margin:.5rem 0 0;padding-left:1.25rem;font-size:.875rem;">
+                <% importResult.errors.forEach(e => { %><li><%= e %></li><% }) %>
+              </ul>
+            <% } %>
+          </div>
+        <% } %>
+
+        <p style="color:#6b7280;font-size:.9rem;margin-top:0">
+          File Excel cần có <strong>header row</strong> với các cột (tên cột phân biệt hoa thường):
+        </p>
+        <div style="overflow-x:auto;margin-bottom:1rem;">
+          <table style="font-size:.85rem;border-collapse:collapse;min-width:600px;">
+            <thead>
+              <tr style="background:var(--surface-alt,#f9fafb);">
+                <th style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);text-align:left;">Tên cột</th>
+                <th style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);text-align:left;">Bắt buộc?</th>
+                <th style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);text-align:left;">Mô tả</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% [
+                ['word','Có','Từ vựng'],
+                ['meaning','Có','Nghĩa của từ'],
+                ['phonetic','Không','Phiên âm, vd: /wɜːrd/'],
+                ['audioUrl','Không','Link âm thanh phiên âm'],
+                ['sourceLanguage','Không','Ngôn ngữ gốc, vd: en'],
+                ['targetLanguage','Không','Ngôn ngữ đích, vd: vi'],
+                ['category','Không','Chủ đề, vd: du lịch'],
+              ].forEach(([col, req, desc]) => { %>
+                <tr>
+                  <td style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);font-family:monospace;"><%= col %></td>
+                  <td style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);"><%= req %></td>
+                  <td style="padding:.4rem .75rem;border:1px solid var(--border,#e5e7eb);"><%= desc %></td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+        <p style="color:#6b7280;font-size:.85rem;">
+          Từ đã tồn tại trong hệ thống (cùng <code>word</code> + <code>targetLanguage</code>) sẽ bị <strong>bỏ qua</strong> (không ghi đè).
+          Tối đa 5 MB.
+        </p>
+
+        <form method="POST" action="/vocabulary/import" enctype="multipart/form-data">
+          <div class="form-row" style="align-items:flex-end;">
+            <div class="form-group">
+              <label for="file">Chọn file Excel (.xlsx, .xls)</label>
+              <input type="file" id="file" name="file" accept=".xlsx,.xls" required />
+            </div>
+            <button type="submit" class="btn btn-primary">Import</button>
+          </div>
+        </form>
+      </div>
+    </div><!-- /panel -->
+
+    <!-- ── TÌM KIẾM ──────────────────────────────────────────────── -->
     <div class="panel">
       <form method="GET" action="/vocabulary" class="form-row" style="align-items: flex-end;">
         <div class="form-group">
@@ -49,31 +136,50 @@
           <input type="text" id="search" name="search" value="<%= search %>" />
         </div>
         <div class="form-group">
-          <label for="category">Chủ đề</label>
-          <input type="text" id="category" name="category" value="<%= category %>" />
+          <label for="filterCategory">Chủ đề</label>
+          <input type="text" id="filterCategory" name="category" value="<%= category %>" />
         </div>
         <button type="submit" class="btn btn-ghost">Tìm kiếm</button>
       </form>
     </div>
 
+    <!-- ── BẢNG TỪ VỰNG ──────────────────────────────────────────── -->
     <div class="panel">
       <% if (items.length === 0) { %>
         <div class="empty-state">Chưa có từ vựng nào trong kho hệ thống</div>
       <% } else { %>
         <table>
           <thead>
-            <tr><th>Từ</th><th>Phiên âm</th><th>Nghĩa</th><th>Ngôn ngữ</th><th>Chủ đề</th><th>Hành động</th></tr>
+            <tr>
+              <th>Từ</th>
+              <th>Phiên âm</th>
+              <th>Audio</th>
+              <th>Nghĩa</th>
+              <th>Ngôn ngữ</th>
+              <th>Chủ đề</th>
+              <th>Hành động</th>
+            </tr>
           </thead>
           <tbody>
             <% items.forEach(v => { %>
               <tr>
                 <td><%= v.word %></td>
                 <td class="mono"><%= v.phonetic || '—' %></td>
+                <td>
+                  <% if (v.audioUrl) { %>
+                    <a href="<%= v.audioUrl %>" target="_blank" rel="noopener"
+                       title="<%= v.audioUrl %>"
+                       style="font-size:.8rem;white-space:nowrap;">▶ nghe</a>
+                  <% } else { %>
+                    —
+                  <% } %>
+                </td>
                 <td><%= v.meaning || '—' %></td>
                 <td class="mono"><%= v.sourceLanguage || '?' %> → <%= v.targetLanguage || '?' %></td>
                 <td><%= v.category || '—' %></td>
                 <td class="actions-cell">
-                  <form class="inline-form" method="POST" action="/vocabulary/<%= v._id %>/delete" onsubmit="return confirm('Xóa từ vựng này?');">
+                  <form class="inline-form" method="POST" action="/vocabulary/<%= v._id %>/delete"
+                        onsubmit="return confirm('Xóa từ vựng này?');">
                     <button type="submit" class="btn btn-danger btn-sm">Xóa</button>
                   </form>
                 </td>
@@ -85,5 +191,28 @@
     </div>
   </main>
 </div>
+
+<script>
+function switchTab(tabId, btn) {
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
+  document.getElementById(tabId).style.display = '';
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.style.opacity = '0.6';
+    b.style.borderBottomColor = 'transparent';
+    b.classList.remove('active');
+  });
+  btn.style.opacity = '1';
+  btn.style.borderBottomColor = 'currentColor';
+  btn.classList.add('active');
+}
+
+// Nếu vừa import (có importResult), tự động mở tab Excel
+<% if (importResult) { %>
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.querySelector('[data-tab="tab-excel"]');
+    if (btn) switchTab('tab-excel', btn);
+  });
+<% } %>
+</script>
 </body>
 </html>

@@ -1,9 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 import '../../core/theme.dart';
 import '../../models/history.dart';
+import '../../models/language.dart';
 import '../../services/history_service.dart';
+import '../../services/language_service.dart';
+import '../../widgets/connection_banner.dart';
+import '../../widgets/word_tools.dart';
+import '../translate/conversation_detail_screen.dart';
 
+/// Tab Lịch sử: toàn bộ bản dịch và các phiên dịch bằng giọng nói.
+/// (Trước đây là mục "Gần đây" nằm trong tab Dịch.)
+///
+/// - Mỗi câu có nút sao chép riêng.
+/// - Chạm 1 hoặc nhiều từ để chọn, rồi bấm "Lưu vào sổ tay" ở thanh dưới để chốt.
+/// - Phiên nói có nút "Tóm tắt" mở màn chi tiết (các lượt nói, tóm tắt AI, xóa).
+/// - Tự cập nhật khi tab Dịch lưu thêm bản dịch mới.
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
 
@@ -12,74 +24,116 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  final _service = HistoryService();
+  final _historyService = HistoryService();
+  final _selection = WordSelection(); // các từ đang chọn để lưu vào sổ tay
+  final _languageService = LanguageService();
+  List<LanguageModel> _languages = [];
+
   List<TranslationHistoryItem> _items = [];
   bool _loading = true;
-  final Set<String> _summarizing = {};
 
   @override
   void initState() {
     super.initState();
+    HistoryService.changes.addListener(_reloadFromDevice);
     _load();
+    _languageService.getLanguages().then((langs) {
+      if (mounted) setState(() => _languages = langs);
+    });
   }
 
+  @override
+  void dispose() {
+    HistoryService.changes.removeListener(_reloadFromDevice);
+    _selection.dispose();
+    super.dispose();
+  }
+
+  /// Hiện ngay dữ liệu trên máy, rồi đồng bộ với máy chủ (nếu đã đăng nhập).
   Future<void> _load() async {
-    setState(() => _loading = true);
+    await _reloadFromDevice();
     try {
-      final items = await _service.getMyHistory();
+      final items = await _historyService.getMyHistory();
       if (!mounted) return;
-      setState(() => _items = items);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Không tải được lịch sử: $e')));
-    } finally {
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _delete(TranslationHistoryItem item) async {
-    try {
-      await _service.deleteHistory(item.id);
-      _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Xóa thất bại: $e')));
-    }
+  Future<void> _reloadFromDevice() async {
+    final cached = await _historyService.getCachedHistory();
+    if (!mounted) return;
+    setState(() {
+      _items = cached;
+      _loading = false;
+    });
   }
 
-  Future<void> _summarize(TranslationHistoryItem item) async {
-    setState(() => _summarizing.add(item.id));
-    try {
-      final summary = await _service.summarizeHistory(item.id);
-      final index = _items.indexWhere((entry) => entry.id == item.id);
-      if (index != -1) {
-        setState(() {
-          _items[index] = TranslationHistoryItem(
-            id: item.id,
-            sourceLanguage: item.sourceLanguage,
-            targetLanguage: item.targetLanguage,
-            sourceText: item.sourceText,
-            translatedText: item.translatedText,
-            type: item.type,
-            segments: item.segments,
-            startedAt: item.startedAt,
-            endedAt: item.endedAt,
-            summary: summary,
-            createdAt: item.createdAt,
-          );
-        });
+  String _langName(String code) {
+    for (final l in _languages) {
+      if (l.code == code) return l.name;
+    }
+    return code;
+  }
+
+  Future<void> _openConversation(TranslationHistoryItem item) async {
+    final deleted = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ConversationDetailScreen(
+          item: item,
+          sourceName: _langName(item.sourceLanguage),
+          targetName: _langName(item.targetLanguage),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (deleted == true) {
+      setState(() => _items.removeWhere((r) => r.id == item.id));
+    }
+    _reloadFromDevice(); // lấy bản tóm tắt vừa tạo (nếu có)
+  }
+
+  Future<void> _copy(String text, String what) async {
+    if (text.trim().isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('Đã sao chép $what')));
+  }
+
+  Future<void> _clearAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Xóa toàn bộ lịch sử?'),
+        content: const Text('Tất cả bản dịch và cuộc trò chuyện sẽ bị xóa.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Xóa tất cả'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final items = List<TranslationHistoryItem>.from(_items);
+    setState(() => _items = []);
+    for (final item in items) {
+      try {
+        await _historyService.deleteHistory(item.id);
+      } catch (_) {
+        // best effort — mục xóa lỗi sẽ quay lại ở lần tải sau
       }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Tóm tắt thất bại: $e')));
-    } finally {
-      if (mounted) setState(() => _summarizing.remove(item.id));
     }
   }
 
@@ -87,317 +141,217 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Dấu vết đã dịch'),
+        title: const Text('Lịch sử'),
         actions: [
-          IconButton(
-            tooltip: 'Tải lại',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _load,
-          ),
-          const SizedBox(width: 6),
+          if (_items.isNotEmpty)
+            TextButton(onPressed: _clearAll, child: const Text('Xóa tất cả')),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _items.isEmpty
-              ? _buildEmptyState()
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppTheme.spaceMd,
-                      8,
-                      AppTheme.spaceMd,
-                      AppTheme.spaceLg,
+      bottomNavigationBar: WordSelectionBar(selection: _selection),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(
+            AppTheme.spaceMd, 8, AppTheme.spaceMd, 32,
+          ),
+          children: [
+            const ConnectionBanner(),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(40),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (_items.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 60),
+                child: Center(
+                  child: Text(
+                    'Chưa có bản dịch nào.\nDịch một câu ở tab Dịch để bắt đầu nhé.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppTheme.moss.withValues(alpha: .5),
+                      fontSize: 13.5,
+                      height: 1.5,
                     ),
-                    itemCount: _items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final item = _items[index];
-                      return Dismissible(
-                        key: ValueKey(item.id),
-                        direction: DismissDirection.endToStart,
-                        background: Container(
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.only(right: 22),
-                          decoration: BoxDecoration(
-                            color: AppTheme.coralTint,
-                            borderRadius: BorderRadius.circular(
-                              AppTheme.radiusLarge,
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.delete_outline_rounded,
-                            color: AppTheme.cranberry,
-                          ),
-                        ),
-                        onDismissed: (_) => _delete(item),
-                        child: item.isConversation
-                            ? _buildConversationCard(item)
-                            : _buildSingleCard(item),
-                      );
-                    },
                   ),
                 ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppTheme.spaceXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.history_rounded, size: 46, color: AppTheme.sage),
-            const SizedBox(height: 18),
-            Text(
-              'Chưa có lịch sử dịch',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 7),
-            Text(
-              'Những câu bạn dịch sẽ được lưu lại ở đây.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.moss.withValues(alpha: .6)),
-            ),
+              )
+            else
+              ..._items.map(_buildCard),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildHeaderRow(TranslationHistoryItem item) {
+  String _hms(DateTime d) {
+    final l = d.toLocal();
+    String p2(int n) => n.toString().padLeft(2, '0');
+    return '${p2(l.hour)}:${p2(l.minute)}:${p2(l.second)}';
+  }
+
+  /// 1 câu: chữ chạm được (thêm vào từ vựng) + nút sao chép riêng cho câu đó.
+  Widget _sentence({
+    required String text,
+    required String what,
+    required String wordLang,
+    required String meaningLang,
+    Color? color,
+    int? maxLines,
+    double top = 8,
+  }) {
     return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-          decoration: BoxDecoration(
-            color: AppTheme.coralTint,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            '${item.sourceLanguage} → ${item.targetLanguage}',
-            style: const TextStyle(
-              color: AppTheme.coral,
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
-        if (item.isConversation) ...[
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: BoxDecoration(
-              color: AppTheme.sand,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '${item.segments.length} lượt',
-              style: const TextStyle(
-                color: AppTheme.moss,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ],
-        const Spacer(),
-        Text(
-          DateFormat('dd/MM · HH:mm').format(item.createdAt),
-          style: TextStyle(
-            fontSize: 11,
-            color: AppTheme.moss.withValues(alpha: .5),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSessionTimeRow(TranslationHistoryItem item) {
-    final start = item.startedAt;
-    final end = item.endedAt;
-    if (start == null || end == null) return const SizedBox.shrink();
-
-    final duration = end.difference(start);
-    final durationLabel = duration.inMinutes >= 1
-        ? '${duration.inMinutes} phút ${duration.inSeconds % 60} giây'
-        : '${duration.inSeconds} giây';
-    return Padding(
-      padding: const EdgeInsets.only(top: 2, bottom: 6),
-      child: Row(
-        children: [
-          const Icon(Icons.schedule_rounded, size: 13, color: AppTheme.sage),
-          const SizedBox(width: 5),
-          Expanded(
-            child: Text(
-              'Bắt đầu ${DateFormat('HH:mm:ss').format(start)} · $durationLabel',
-              style: TextStyle(
-                fontSize: 11,
-                color: AppTheme.moss.withValues(alpha: .55),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSummarySection(TranslationHistoryItem item) {
-    final isLoading = _summarizing.contains(item.id);
-    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: isLoading ? null : () => _summarize(item),
-            icon: isLoading
-                ? const SizedBox(
-                    height: 14,
-                    width: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.auto_awesome_rounded, size: 16),
-            label: Text(
-              item.summary == null ? 'Tóm tắt bằng AI' : 'Tóm tắt lại',
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(top: top),
+            child: TappableWords(
+              text: text,
+              maxLines: maxLines,
+              overflow: maxLines == null ? null : TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                color: color,
+              ),
+              selection: _selection,
+              wordLang: wordLang,
+              meaningLang: meaningLang,
             ),
           ),
         ),
-        if (item.summary != null && item.summary!.isNotEmpty)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(top: 4),
-            padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(
-              color: AppTheme.coralTint,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.auto_awesome_rounded,
-                  size: 16,
-                  color: AppTheme.coral,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    item.summary!,
-                    style: const TextStyle(fontSize: 13, height: 1.35),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        IconButton(
+          tooltip: 'Sao chép $what',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.copy_rounded, size: 18),
+          color: AppTheme.moss.withValues(alpha: .6),
+          onPressed: () => _copy(text, what),
+        ),
       ],
     );
   }
 
-  Widget _buildSingleCard(TranslationHistoryItem item) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 10, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildHeaderRow(item),
-            const SizedBox(height: 14),
-            Text(
-              item.sourceText,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontFamily: 'serif',
-                fontSize: 17,
-                height: 1.3,
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Divider(),
-            ),
-            Text(
-              item.translatedText,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                height: 1.4,
-              ),
-            ),
-            _buildSummarySection(item),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _buildCard(TranslationHistoryItem item) {
+    final dir =
+        '${item.sourceLanguage.toUpperCase()} → ${item.targetLanguage.toUpperCase()}';
+    final now = DateTime.now();
+    final created = item.createdAt.toLocal();
+    final sameDay = created.year == now.year &&
+        created.month == now.month &&
+        created.day == now.day;
+    final time = sameDay
+        ? '${created.hour}:${created.minute.toString().padLeft(2, '0')}'
+        : '${created.day.toString().padLeft(2, '0')}/${created.month.toString().padLeft(2, '0')}';
+    final isConversation = item.type == 'conversation' && item.segments.isNotEmpty;
+    // Phiên nói: sao chép toàn bộ các lượt nói, mỗi lượt 1 dòng.
+    final source = isConversation
+        ? item.segments.map((s) => s.sourceText).join('\n')
+        : item.sourceText;
+    final target = isConversation
+        ? item.segments.map((s) => s.translatedText).join('\n')
+        : item.translatedText;
 
-  Widget _buildConversationCard(TranslationHistoryItem item) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        child: ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(bottom: 10),
-          title: _buildHeaderRow(item),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    Widget pill(String text, Color bg, Color fg) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            text,
+            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: fg),
+          ),
+        );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(15, 12, 6, 8),
+      decoration: BoxDecoration(
+        color: AppTheme.ivory,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              pill(dir, const Color(0xFFDCEFE2), const Color(0xFF1C7A45)),
+              if (isConversation) ...[
+                const SizedBox(width: 6),
+                pill(
+                  '${item.segments.length} lượt nói',
+                  AppTheme.sand,
+                  AppTheme.moss.withValues(alpha: .6),
+                ),
+              ],
+              const SizedBox(width: 8),
+              Text(
+                time,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: AppTheme.moss.withValues(alpha: .45),
+                ),
+              ),
+            ],
+          ),
+          if (isConversation) ...[
+            // Tóm gọn: chỉ 1 dòng xem trước + số lượt. Muốn xem chi tiết từng
+            // lượt (giờ, copy, lưu từ, xóa riêng) thì bấm "Chi tiết".
+            Padding(
+              padding: const EdgeInsets.only(top: 8, right: 9),
+              child: Text(
+                '${_hms(item.segments.first.at)}  ${item.segments.first.sourceText}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              ),
+            ),
+            Row(
               children: [
-                _buildSessionTimeRow(item),
-                Text(
-                  item.segments.isNotEmpty
-                      ? item.segments.first.sourceText
-                      : '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontFamily: 'serif', fontSize: 14),
+                TextButton.icon(
+                  onPressed: () => _copy(source, 'toàn bộ câu nguồn'),
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('Chép nguồn'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _copy(target, 'toàn bộ câu đích'),
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('Chép đích'),
                 ),
               ],
             ),
-          ),
-          children: [
-            const Divider(),
-            ...item.segments.map(
-              (segment) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 7),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      DateFormat('HH:mm:ss').format(segment.at),
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: AppTheme.moss.withValues(alpha: .5),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      segment.sourceText,
-                      style: const TextStyle(fontFamily: 'serif', fontSize: 15),
-                    ),
-                    Text(
-                      segment.translatedText,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+          ] else ...[
+            _sentence(
+              text: source,
+              what: 'câu nguồn',
+              wordLang: item.sourceLanguage,
+              meaningLang: item.targetLanguage,
+            ),
+            _sentence(
+              text: target,
+              what: 'câu đích',
+              wordLang: item.targetLanguage,
+              meaningLang: item.sourceLanguage,
+              color: AppTheme.moss,
+              top: 0,
+            ),
+          ],
+          if (isConversation)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _openConversation(item),
+                icon: const Icon(Icons.chevron_right_rounded, size: 18),
+                label: Text(
+                  (item.summary ?? '').trim().isNotEmpty
+                      ? 'Chi tiết · có tóm tắt'
+                      : 'Chi tiết & tóm tắt',
                 ),
               ),
             ),
-            const Divider(),
-            _buildSummarySection(item),
-          ],
-        ),
+        ],
       ),
     );
   }

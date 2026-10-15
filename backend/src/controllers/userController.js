@@ -1,4 +1,8 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
+const Vocabulary = require('../models/Vocabulary');
+const TranslationHistory = require('../models/TranslationHistory');
+const AIConversation = require('../models/AIConversation');
 
 // @desc    Lấy danh sách người dùng (có tìm kiếm, phân trang)
 // @route   GET /api/users?page=1&limit=20&search=abc
@@ -73,13 +77,56 @@ const updateUser = async (req, res, next) => {
   }
 };
 
-// @desc    Xóa tài khoản
+// @desc    Xóa tài khoản + CASCADE toàn bộ dữ liệu của user đó
 // @route   DELETE /api/users/:id
+// MongoDB không có ON DELETE CASCADE như SQL — nếu chỉ xóa document user thì
+// vocabularies / translationhistories / aiconversations của user thành dữ liệu
+// mồ côi (ref ObjectId trỏ vào _id không còn tồn tại). Vì vậy phải tự cascade,
+// và bọc trong TRANSACTION đa document để "xóa hết hoặc không xóa gì":
+// nếu chết giữa chừng thì không có trạng thái nửa vời.
+// Transaction cần replica set; nếu Mongo đang chạy standalone (docker mặc định)
+// thì degrade về xóa tuần tự — dữ liệu vẫn sạch, chỉ mất tính nguyên tử.
 const deleteUser = async (req, res, next) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
+    const userId = req.params.id;
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'Không tìm thấy người dùng' });
-    res.json({ message: 'Đã xóa tài khoản' });
+
+    const cascade = async (session) => {
+      const opts = session ? { session } : {};
+      const [vocab, history, conversations] = await Promise.all([
+        Vocabulary.deleteMany({ user: userId }, opts),
+        TranslationHistory.deleteMany({ user: userId }, opts),
+        AIConversation.deleteMany({ user: userId }, opts),
+      ]);
+      await User.deleteOne({ _id: userId }, opts);
+      return {
+        vocabularies: vocab.deletedCount,
+        histories: history.deletedCount,
+        conversations: conversations.deletedCount,
+      };
+    };
+
+    let deleted;
+    let atomic = true;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        deleted = await cascade(session);
+      });
+    } catch (err) {
+      // Mã 20 / IllegalOperation = standalone không hỗ trợ transaction -> chạy thường
+      if (err.code === 20 || /replica set|Transaction numbers/i.test(err.message)) {
+        atomic = false;
+        deleted = await cascade(null);
+      } else {
+        throw err;
+      }
+    } finally {
+      session.endSession();
+    }
+
+    res.json({ message: 'Đã xóa tài khoản', deleted, atomic });
   } catch (error) {
     next(error);
   }

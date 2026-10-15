@@ -16,4 +16,6 @@ class LanguageModel {
       name: json['name'] ?? '',
     );
   }
+
+  Map<String, dynamic> toJson() => {'_id': id, 'code': code, 'name': name};
 }

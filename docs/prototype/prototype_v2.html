@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>lingua — Prototype v2</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1d4d43; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #666; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
+    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1d4d43; z-index: 9999; }
+    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
+    #__bundler_placeholder { color: #999; font-size: 14px; }
+  </style>
+  <noscript>
+    <style>#__bundler_loading { display: none; }</style>
+    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#999;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
+      This page requires JavaScript to display.
+    </div>
+  </noscript>
+</head>
+<body>
+  <div id="__bundler_thumbnail">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#1d4d43"></rect>
+    <rect x="450" y="250" width="300" height="300" rx="70" fill="#f0705a"></rect>
+    <text x="600" y="435" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="130" font-weight="800" fill="#ffffff">文A</text>
+  </svg>
+</div>
+  <div id="__bundler_loading">Unpacking...</div>
+
+  <script>
+    
+document.addEventListener('DOMContentLoaded', async function() {
+  const loading = document.getElementById('__bundler_loading');
+  function setStatus(msg) { if (loading) loading.textContent = msg; }
+
+  const FONT_MIME = /^(font[/]|application[/](x-)?font-|application[/]vnd\.ms-fontobject)/i;
+  const MIME_TOKEN = /^[\w.+-]+[/][\w.+-]+$/;
+  function toBase64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin);
+  }
+
+  // Error sink persists across replaceWith since it's on window, not the DOM.
+  window.addEventListener('error', function(e) {
+    // Failed resource loads (CSP-blocked links, scripts, images) fire plain
+    // events at the element — warn only; real JS errors carry message/error.
+    if (!e.message && !e.error && e.target && e.target !== window) {
+      console.warn('[bundle] resource failed to load:',
+        e.target.tagName, String(e.target.src || e.target.href || ''));
+      return;
+    }
+    var p = document.body || document.documentElement;
+    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
+    d.id = '__bundler_err';
+    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
+      '[bundle] ' + (e.message || e.type) +
+      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
+  }, true);
+
+  try {
+    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
+    const templateEl = document.querySelector('script[type="__bundler/template"]');
+    if (!manifestEl || !templateEl) {
+      setStatus('Error: missing bundle data');
+      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
+      return;
+    }
+
+    const manifest = JSON.parse(manifestEl.textContent);
+    let template = JSON.parse(templateEl.textContent);
+
+    // Nested page bundles (iframe targets). Each ships ONCE, in the ROOT
+    // document's manifest; frame srcs carry an about:blank#<uuid> marker
+    // instead of a substitutable uuid. Every document mints the blobs for
+    // its OWN frames — from local text at the root, or text obtained from
+    // its DIRECT parent over the relay protocol below — so each frame
+    // navigation stays same-origin with its initiator and a deduped page
+    // loads at any depth on any host, including a file:// download's
+    // opaque origins (where a blob minted by one document cannot be
+    // navigated to by another).
+    const pageOrderEl = document.querySelector('script[type="__bundler/page_order"]');
+    const pageOrder = pageOrderEl ? JSON.parse(pageOrderEl.textContent) : [];
+    const pageSet = new Set(pageOrder);
+    const pageTexts = {};
+
+    // ── Nested-page text protocol (parent-chain relay) ──
+    // Page bundles ship once, in the ROOT document's manifest. Every
+    // document mints the blobs for its OWN frames, obtaining page text
+    // through a strict parent-chain relay: a document only ever SENDS to
+    // its direct parent (which, for every document the publisher's own
+    // runtime minted, is another publisher document) and only ACCEPTS
+    // text from that direct parent; requests from below are honored only
+    // for the document's own child frames, and the ROOT never sends
+    // upward at all. That last rule is load-bearing: the artifact host's
+    // frame-ancestors allows claude.ai (and friends) to frame an
+    // artifact, so window.top can be a FOREIGN document — a top-addressed
+    // protocol would hand page uuids to that ancestor and accept forged
+    // "page text" from it, minting attacker HTML as an artifact-origin
+    // blob document. The chain never touches the ancestor: requests stop
+    // at the root, replies are origin-addressed per hop (never '*' when
+    // an origin exists), and both directions are origin-gated (on https
+    // a foreign sender's origin can never equal this document's; in
+    // opaque contexts — file:// — everything serializes as 'null', where
+    // an embedded EXTERNAL frame still fails the gate by carrying its
+    // own real origin, and a sandboxed child of such a frame is excluded
+    // by the own-child-frames check plus uuid unguessability). Shape is
+    // deny-by-default: one request form, one reply form, no error
+    // replies.
+    // window.origin is the SERIALIZED SECURITY origin ('null' in opaque
+    // contexts such as a sandboxed preview iframe) — location.origin is
+    // computed from the URL and stays 'https://…' even when the document
+    // is sandboxed, which would misgate every opaque chain.
+    const OWN_TARGET = /^https?:[/][/]/.test(window.origin || '')
+      ? window.origin
+      : '*';
+    function trustedOrigin(e) {
+      if (e.origin === window.origin) return true; // https chains; opaque==opaque
+      // file:// trees: Chrome serializes the file document's origin as
+      // 'file://' while the blob: documents it mints serialize as 'null',
+      // so the two legitimate shapes can never string-match — accept the
+      // pair in both directions. https origins never serialize as either,
+      // and sender identity (own child frame / direct parent) is checked
+      // separately.
+      return (
+        (e.origin === 'null' &&
+          (window.origin === 'file://' ||
+            window.location.protocol === 'file:')) ||
+        (/^file:/.test(e.origin) && window.origin === 'null')
+      );
+    }
+    // Non-empty only in the root document (nested bundles ship an empty
+    // island), so it doubles as the root marker: the root answers from
+    // local text and treats a miss as authoritative — never relaying to
+    // its (possibly foreign) parent.
+    const isPageRoot = pageOrder.length > 0;
+    const blobUrls = {};
+    const resourceBlobs = {};
+    const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const pendingFrames = {}; // uuid -> [{el, frag}] awaiting text for own frames
+    const pendingRelays = {}; // uuid -> [childWindow] awaiting text to pass down
+    function mountPage(el, frag, text) {
+      const pageBlob = new Blob([text], { type: 'text/html' });
+      const u = URL.createObjectURL(pageBlob);
+      resourceBlobs[u] = pageBlob;
+      el.src = u + frag;
+    }
+    function deliverPage(uuid, text) {
+      const frames = pendingFrames[uuid];
+      delete pendingFrames[uuid];
+      if (frames) for (const f of frames) mountPage(f.el, f.frag, text);
+      const relays = pendingRelays[uuid];
+      delete pendingRelays[uuid];
+      if (relays) {
+        for (const cw of relays) {
+          try { cw.postMessage({ __bundler_page: uuid, __bundler_text: text }, OWN_TARGET); } catch (err) { /* gone */ }
+        }
+      }
+    }
+    function ownFrameWindows() {
+      const out = [];
+      for (const f of Array.from(document.querySelectorAll('iframe'))) {
+        try { if (f.contentWindow) out.push(f.contentWindow); } catch (err) { /* detached */ }
+      }
+      return out;
+    }
+    window.addEventListener('message', function (e) {
+      const d = e.data;
+      if (!d || typeof d !== 'object' || !e.source) return;
+      // Origin gate first; the structural checks below (own-child-frames
+      // for requests, direct-parent + solicited-uuid for replies, the
+      // root's never-relay rule) are what hold in fully opaque chains
+      // where origin strings can't discriminate — a sandboxed root's
+      // FOREIGN wrapper still fails all three even though both serialize
+      // as real-vs-'null' rather than matching.
+      if (!trustedOrigin(e)) return;
+      if (typeof d.__bundler_need === 'string' && UUID_SHAPE.test(d.__bundler_need)) {
+        // Requests are honored only for this document's own child frames.
+        if (ownFrameWindows().indexOf(e.source) < 0) return;
+        const uuid = d.__bundler_need;
+        const text = pageTexts[uuid];
+        if (typeof text === 'string') {
+          try { e.source.postMessage({ __bundler_page: uuid, __bundler_text: text }, OWN_TARGET); } catch (err) { /* gone */ }
+          return;
+        }
+        if (isPageRoot || window.parent === window) return; // authoritative miss
+        const waiting = pendingRelays[uuid];
+        if (waiting) {
+          if (waiting.indexOf(e.source) < 0) waiting.push(e.source);
+          return;
+        }
+        // Never-answered uuids would otherwise accumulate forever under a
+        // request spray; past the cap (far above any real page count) new
+        // relays are dropped rather than remembered.
+        if (Object.keys(pendingRelays).length >= 128) return;
+        pendingRelays[uuid] = [e.source];
+        window.parent.postMessage({ __bundler_need: uuid }, OWN_TARGET);
+      } else if (
+        typeof d.__bundler_page === 'string' &&
+        UUID_SHAPE.test(d.__bundler_page) &&
+        typeof d.__bundler_text === 'string'
+      ) {
+        // The shape test is load-bearing beyond tidiness: the solicited
+        // check below uses the in operator, which matches prototype keys
+        // ('__proto__', 'constructor') — an unshaped key would reach
+        // deliverPage and throw, painting the error banner.
+        // Text is accepted only from the direct parent — the document
+        // that minted this one.
+        if (e.source !== window.parent || window.parent === window) return;
+        if (!(d.__bundler_page in pendingFrames) && !(d.__bundler_page in pendingRelays)) return;
+        deliverPage(d.__bundler_page, d.__bundler_text);
+      }
+    });
+
+    const uuids = Object.keys(manifest);
+    setStatus('Unpacking ' + uuids.length + ' assets...');
+
+    await Promise.all(uuids.map(async (uuid) => {
+      const entry = manifest[uuid];
+      try {
+        const binaryStr = atob(entry.data);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        let finalBytes = bytes;
+        if (entry.compressed) {
+          if (typeof DecompressionStream !== 'undefined') {
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            const reader = ds.readable.getReader();
+            writer.write(bytes);
+            writer.close();
+            const chunks = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalLen += value.length;
+            }
+            finalBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
+          } else {
+            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+          }
+        }
+
+        if (pageSet.has(uuid)) {
+          pageTexts[uuid] = new TextDecoder().decode(finalBytes);
+          return;
+        }
+        if (FONT_MIME.test(entry.mime) && MIME_TOKEN.test(entry.mime)) {
+          // Strict artifact hosts allow font-src data: but not blob:.
+          blobUrls[uuid] = 'data:' + entry.mime + ';base64,' +
+            (entry.compressed ? toBase64(finalBytes) : entry.data);
+        } else {
+          const blob = new Blob([finalBytes], { type: entry.mime });
+          blobUrls[uuid] = URL.createObjectURL(blob);
+          resourceBlobs[blobUrls[uuid]] = blob;
+        }
+      } catch (err) {
+        console.error('Failed to decode asset ' + uuid + ':', err);
+        const blob = new Blob([], { type: entry.mime });
+        blobUrls[uuid] = URL.createObjectURL(blob);
+        resourceBlobs[blobUrls[uuid]] = blob;
+      }
+    }));
+
+    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
+    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
+    const resourceMap = {};
+    for (const entry of extResources) {
+      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
+    }
+
+    // Artifact-host CSP (connect-src 'self') refuses fetch() of blob: URLs —
+    // consumers read these Blobs directly. Survives the swap like the error sink.
+    window.__resourceBlobs = resourceBlobs;
+
+    setStatus('Rendering...');
+    // Page uuids have no blob here — they ride inside about:blank#<uuid>
+    // frame markers the pass below resolves after the swap.
+    for (const uuid of uuids) {
+      if (pageSet.has(uuid)) continue;
+      template = template.split(uuid).join(blobUrls[uuid]);
+    }
+
+    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
+    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
+    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
+
+    const resourceScript = '<script>window.__resources = ' +
+      JSON.stringify(resourceMap).replace(/<\//g, '<\\/') +
+      ';</' + 'script>';
+    // Inject after <head> so the DOCTYPE stays first; prepending the script
+    // would push the parser into quirks mode. DOMParser always emits a <head>
+    // (synthesizing one if the source HTML omitted it) but may carry
+    // attributes through, so match the full opening tag. slice() rather than
+    // replace() keeps us clear of $-pattern substitution in resourceScript.
+    const headOpen = template.match(/<head[^>]*>/i);
+    if (headOpen) {
+      const i = headOpen.index + headOpen[0].length;
+      template = template.slice(0, i) + resourceScript + template.slice(i);
+    }
+
+    // Parse the template and swap the root element. Scripts inserted via
+    // DOMParser/replaceWith are inert per spec — re-create each with
+    // createElement so they execute, awaiting onload for src scripts to
+    // preserve ordering (React before ReactDOM before Babel before text/babel).
+    const doc = new DOMParser().parseFromString(template, 'text/html');
+    document.documentElement.replaceWith(doc.documentElement);
+
+    // Resolve page-frame markers: mint this document's own blob for each
+    // framed page — from local text when this is the root, otherwise by
+    // asking the direct parent over the relay protocol above. An
+    // unanswered request leaves the frame on about:blank, the same
+    // degraded state as a refused embed.
+    {
+      const MARKER = /^about:blank#([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(#.*)?$/;
+      const needed = [];
+      for (const el of Array.from(document.querySelectorAll('iframe'))) {
+        const m = MARKER.exec(el.getAttribute('src') || '');
+        if (!m) continue;
+        const text = pageTexts[m[1]];
+        if (typeof text === 'string') {
+          mountPage(el, m[2] || '', text);
+        } else if (window.parent !== window && !isPageRoot) {
+          const had = pendingFrames[m[1]];
+          (pendingFrames[m[1]] = had || []).push({ el: el, frag: m[2] || '' });
+          if (!had) needed.push(m[1]);
+        }
+      }
+      for (const uuid of needed) {
+        window.parent.postMessage({ __bundler_need: uuid }, OWN_TARGET);
+      }
+    }
+
+    const dead = Array.from(document.scripts);
+    for (const old of dead) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent;
+      // text/babel scripts with a src: read and inline. transformScriptTags
+      // does XHR against the src, but blob:null/ from a file:// origin is
+      // silently dropped. Inlining makes it a plain inline babel script,
+      // which transformScriptTags handles unconditionally.
+      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
+        const pre = resourceBlobs[s.src.split('#')[0]];
+        s.textContent = pre ? await pre.text() : await (await fetch(s.src)).text();
+        s.removeAttribute('src');
+      }
+      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
+      old.replaceWith(s);
+      if (p) await p;
+    }
+    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
+    // which fired before we swapped the document. Trigger manually if present.
+    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
+      window.Babel.transformScriptTags();
+    }
+  } catch (err) {
+    setStatus('Error unpacking: ' + err.message);
+    console.error('Bundle unpack error:', err);
+  }
+});
+
+  </script>
+
+  <script type="__bundler/manifest">
+{}
+  </script>
+
+  <script type="__bundler/ext_resources">
+[]
+  </script>
+
+  <script type="__bundler/page_order">
+[]
+  </script>
+
+  <script type="__bundler/template">
+"<!DOCTYPE html>\n<html lang=\"vi\"><head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>lingua — Prototype v2<\u002Ftitle>\n\n<style>\n* { margin:0; padding:0; box-sizing:border-box; }\nbody { background:#e8e9ec; color:#1a1c1f; font-family:-apple-system,\"SF Pro Text\",\"Segoe UI\",Roboto,sans-serif; }\n.pagehead { padding:26px 34px 6px; }\n.pagehead h1 { font-size:22px; letter-spacing:-.02em; }\n.pagehead p { color:#5c6570; font-size:13.5px; margin-top:4px; max-width:760px; }\n.frames { display:flex; gap:56px; padding:22px 34px 60px; align-items:flex-start; flex-wrap:wrap; }\n.frame-col h2 { font-size:19px; letter-spacing:-.02em; }\n.frame-col .sub { color:#5c6570; font-size:12.5px; margin:2px 0 14px; }\n\n.device { width:414px; border-radius:52px; background:#0d0f12; padding:12px;\n          box-shadow:0 24px 60px rgb(13 15 18 / .28); }\n.device .app { position:relative; width:390px; height:844px; border-radius:40px; overflow:hidden;\n               background:var(--bg); }\n.device.android { border-radius:34px; }\n.device.android .app { border-radius:24px; }\n\n.app { --bg:#f3efe6; --card:#fdfbf6; --sand:#e9e3d5; --green:#1d4d43; --green-soft:#2a5e52;\n       --coral:#f0705a; --coral-tint:#f9ddd4; --ink:#22302b; --muted:#7d867f; --line:#e3ddcf;\n       --cranberry:#b8453a;\n       font-family:-apple-system,\"SF Pro Text\",sans-serif; color:var(--ink);\n       display:flex; flex-direction:column; }\n.app[data-platform=\"android\"] { font-family:Roboto,\"Segoe UI\",-apple-system,sans-serif; }\n.app[data-platform=\"ios\"] .only-android { display:none !important; }\n.app[data-platform=\"android\"] .only-ios { display:none !important; }\n\n.statusbar { height:54px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between;\n             padding:14px 26px 0; font-weight:700; font-size:15px; position:relative; z-index:70; }\n.statusbar .icons { font-size:12px; letter-spacing:1px; }\n.notch { position:absolute; top:12px; left:50%; transform:translateX(-50%); width:120px; height:34px;\n         background:#0d0f12; border-radius:20px; z-index:90; }\n.punch { position:absolute; top:16px; left:50%; transform:translateX(-50%); width:14px; height:14px;\n         background:#0d0f12; border-radius:50%; z-index:90; }\n.homebar { position:absolute; bottom:7px; left:50%; transform:translateX(-50%); width:130px; height:5px;\n           background:#111; opacity:.85; border-radius:3px; z-index:90; }\n\n.body { flex:1; position:relative; min-height:0; display:flex; flex-direction:column; }\n.screen { position:absolute; inset:0; display:none; flex-direction:column; background:var(--bg); }\n.screen.on { display:flex; }\n.scroll { flex:1; overflow-y:auto; padding:0 20px 18px; scrollbar-width:none; }\n.scroll::-webkit-scrollbar { display:none; }\n\n.shead { display:flex; align-items:center; gap:12px; padding:8px 20px 10px; }\n.shead h1 { font-size:23px; font-weight:800; color:var(--green); letter-spacing:-.02em; }\n.shead .back { font-size:24px; font-weight:700; color:var(--green); background:none; border:0;\n               cursor:pointer; line-height:1; padding:0; }\n.shead .spacer { flex:1; }\n\n.btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; height:54px;\n       border:0; border-radius:18px; background:var(--coral); color:#fff; font-size:16px;\n       font-weight:800; cursor:pointer; font-family:inherit; }\n.btn.small { width:auto; height:36px; padding:0 15px; font-size:13px; border-radius:12px; }\n.btn.ghost { background:transparent; color:var(--coral); border:1.5px solid var(--coral); }\n.logo-tile { width:38px; height:38px; border-radius:12px; background:var(--green); color:#fff;\n             display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; }\n.avatar { width:38px; height:38px; border-radius:12px; background:var(--coral-tint); color:var(--coral);\n          display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px;\n          border:1.5px solid #f3c1b4; cursor:pointer; }\n.eyebrow { font-size:11.5px; font-weight:800; letter-spacing:.1em; color:var(--coral); }\n.pill { display:inline-block; border-radius:999px; padding:2px 9px; font-size:10.5px; font-weight:800; }\n.pill.ok { background:#dcefe2; color:#1c7a45; }\n.pill.coral { background:var(--coral-tint); color:var(--cranberry); }\n\n/* ===== translate ===== */\n.langbar { display:flex; gap:8px; align-items:center; background:var(--sand); border-radius:18px;\n           padding:8px; margin-bottom:12px; }\n.langbar .lang { flex:1; background:var(--card); border:1.5px solid var(--line); border-radius:13px;\n                 padding:10px 12px; text-align:center; font-weight:800; font-size:15px;\n                 font-family:inherit; color:var(--ink); }\n.langbar button.lang { color:var(--green); cursor:pointer; }\n.langbar .swap { width:36px; height:36px; flex-shrink:0; border-radius:50%; background:var(--card);\n                 border:0; font-size:16px; cursor:pointer; color:var(--green); }\n.inputcard { background:var(--card); border:1.5px solid var(--line); border-radius:20px;\n             padding:14px 16px 10px; margin-bottom:12px; }\n.inputcard textarea { width:100%; border:0; background:transparent; font-size:19px; line-height:1.45;\n                      resize:none; outline:none; font-family:inherit; color:var(--ink); }\n.inputcard textarea::placeholder { color:#9aa39c; }\n.inputcard .row { display:flex; align-items:center; gap:10px; border-top:1px solid #efe9dc; padding-top:9px; }\n.inputcard .voice { display:flex; align-items:center; gap:7px; border:0; background:var(--coral-tint);\n                    color:var(--cranberry); font-weight:800; font-size:13px; border-radius:999px;\n                    padding:8px 14px; cursor:pointer; font-family:inherit; }\n.inputcard .voicenote { font-size:11.5px; color:#9aa39c; font-weight:600; }\n.inputcard .clear { border:0; background:var(--sand); color:var(--muted); width:30px; height:30px;\n                    border-radius:50%; font-size:14px; cursor:pointer; display:none; }\n.resultcard { background:var(--green); border-radius:20px; padding:16px; margin-bottom:12px; color:#fff;\n              display:none; }\n.resultcard .rhead { display:flex; align-items:center; gap:10px; margin-bottom:8px; }\n.resultcard .rlang { font-size:11.5px; font-weight:800; letter-spacing:.08em; color:#9fc3b5; }\n.resultcard .ric { border:0; background:var(--green-soft); color:#fff; width:32px; height:32px;\n                   border-radius:50%; cursor:pointer; font-size:13px; }\n.resultcard .rtext { font-size:21px; font-weight:700; line-height:1.4; }\n.wordscard { background:var(--card); border:1.5px solid var(--line); border-radius:20px;\n             padding:14px 16px; margin-bottom:12px; display:none; }\n.wordscard .whead { font-size:11.5px; font-weight:800; letter-spacing:.08em; color:var(--muted);\n                    margin-bottom:10px; }\n.wordscard .chips { display:flex; flex-wrap:wrap; gap:8px; }\n.chip { border:1.5px solid var(--line); background:var(--card); border-radius:12px; padding:7px 13px;\n        font-weight:700; font-size:14px; cursor:pointer; font-family:inherit; color:var(--ink); }\n.chip.known { border-color:var(--green); background:#eef2ea; }\n.recents-head { display:flex; align-items:baseline; gap:10px; margin:14px 2px 10px; }\n.recents-head .cl { border:0; background:none; color:var(--muted); font-size:12px; font-weight:700;\n                    cursor:pointer; font-family:inherit; margin-left:auto; }\n.rcard { background:var(--card); border-radius:16px; padding:13px 15px; margin-bottom:10px;\n         cursor:pointer; box-shadow:0 1px 2px rgb(30 40 30 / .05); }\n.rcard .meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; }\n.rcard .meta time { font-size:11.5px; color:var(--muted); }\n.rcard .src { font-weight:700; font-size:14px; }\n.rcard .dst { color:var(--green); font-weight:700; font-size:14px; margin-top:3px; }\n\n/* ===== AI ===== */\n.ai-empty { display:flex; flex-direction:column; align-items:center; text-align:center; padding-top:90px; }\n.ai-empty .orb { width:84px; height:84px; border-radius:26px; background:var(--coral-tint);\n                 display:flex; align-items:center; justify-content:center; font-size:30px;\n                 color:var(--coral); margin-bottom:20px; }\n.ai-empty h3 { font-size:24px; font-weight:800; color:var(--green); line-height:1.2; letter-spacing:-.02em; }\n.ai-empty p { color:var(--muted); font-size:14px; margin:10px 0 24px; line-height:1.5; }\n.sug { background:var(--card); border:1.5px solid var(--line); border-radius:999px; padding:10px 18px;\n       font-weight:700; font-size:14px; cursor:pointer; font-family:inherit; margin-bottom:9px; color:var(--ink); }\n.bubble-user { display:flex; justify-content:flex-end; margin-bottom:14px; }\n.bubble-user .txt { border-left:3px solid var(--coral); padding-left:10px; color:var(--coral);\n                    font-weight:700; font-size:15px; line-height:1.4; max-width:280px; }\n.bubble-ai { background:var(--card); border-radius:16px; padding:13px 15px; font-size:14px;\n             line-height:1.55; margin-bottom:14px; box-shadow:0 1px 2px rgb(30 40 30 / .05);\n             max-width:310px; white-space:pre-line; }\n.inputbar { display:flex; gap:10px; padding:10px 16px 12px; border-top:1px solid var(--line);\n            align-items:center; }\n.inputbar input { flex:1; border:1.8px solid var(--green); border-radius:999px; height:48px;\n                  padding:0 18px; font-size:15px; background:var(--card); outline:none;\n                  font-family:inherit; color:var(--ink); }\n.inputbar input::placeholder { color:#9aa39c; }\n.inputbar .send { width:48px; height:48px; flex-shrink:0; border-radius:50%; background:var(--coral);\n                  border:0; color:#fff; font-size:18px; cursor:pointer; }\n\n/* ===== vocab / flashcard ===== */\n.wcard { display:flex; align-items:center; gap:12px; background:var(--card); border-radius:16px;\n         padding:13px 15px; margin-bottom:10px; }\n.wcard .w { flex:1; }\n.wcard .w b { font-size:16px; }\n.wcard .w .ipa { color:var(--muted); font-size:12px; margin-left:6px; }\n.wcard .w .mean { color:var(--green); font-size:13.5px; font-weight:700; margin-top:2px; }\n.wcard .w .dir { font-size:11px; color:var(--muted); margin-top:2px; }\n.wcard .act { border:0; background:none; font-size:16px; cursor:pointer; color:var(--muted); }\n.vocab-empty { text-align:center; color:var(--muted); font-size:14px; margin-top:80px; line-height:1.6; }\n.flash { background:var(--card); border-radius:26px; min-height:300px; display:flex; flex-direction:column;\n         align-items:center; justify-content:center; gap:10px; cursor:pointer; margin:18px 0;\n         box-shadow:0 8px 24px rgb(30 40 30 / .07); }\n.flash b { font-size:30px; color:var(--green); }\n.flash .ipa { color:var(--muted); }\n.flash .meaning { display:none; font-size:23px; color:var(--coral); font-weight:800; }\n.flash.flipped .meaning { display:block; }\n.flash.flipped .hint { display:none; }\n.flash .hint { color:var(--muted); font-size:13px; }\n.fc-count { text-align:center; color:var(--muted); font-weight:700; font-size:13px; margin-top:8px; }\n\n/* ===== profile ===== */\n.banner { background:var(--green); border-radius:22px; padding:20px; display:flex; gap:15px;\n          align-items:center; color:#fff; margin-bottom:20px; }\n.banner .bav { width:52px; height:52px; border-radius:16px; background:var(--coral); color:#fff;\n               display:flex; align-items:center; justify-content:center; font-weight:800; font-size:19px; }\n.banner b { font-size:19px; }\n.banner p { color:#cfe0d8; font-size:13px; margin-top:2px; }\n.sect { font-size:17px; font-weight:800; margin:0 0 10px; }\n.card { background:var(--card); border-radius:18px; padding:4px 16px; margin-bottom:20px; }\n.prow { display:flex; align-items:center; gap:13px; padding:13px 0; cursor:pointer; }\n.prow + .prow { border-top:1px solid var(--line); }\n.prow .pic { width:40px; height:40px; border-radius:13px; background:var(--sand); display:flex;\n             align-items:center; justify-content:center; font-size:16px; }\n.prow b { font-size:15px; }\n.prow p { font-size:12px; color:var(--muted); margin-top:1px; }\n.prow .go { margin-left:auto; color:var(--muted); }\n\n/* ===== tab bar ===== */\n.tabbar { flex-shrink:0; display:flex; background:#fbf8f1; border-top:1px solid var(--line);\n          padding:8px 6px 24px; position:relative; z-index:30; }\n.app[data-platform=\"android\"] .tabbar { padding-bottom:14px; background:#f6f2e9; }\n.tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; border:0;\n       background:none; color:var(--muted); font-size:11px; font-weight:700; cursor:pointer;\n       font-family:inherit; }\n.tab svg { width:22px; height:22px; }\n.tab .ipill { padding:3px 14px; border-radius:999px; }\n.tab.on { color:var(--green); }\n.tab.on .ipill { background:var(--coral-tint); }\n.app[data-platform=\"android\"] .tab .ipill { border-radius:12px; padding:3px 18px; }\n\n/* ===== login (phủ toàn màn) ===== */\n.login { position:absolute; inset:0; background:var(--bg); z-index:50; display:none;\n         flex-direction:column; padding:70px 24px 0; }\n.login.on { display:flex; }\n.login .brand { display:flex; align-items:center; gap:14px; margin:16px 0 34px; }\n.login .brand .logo-tile { width:50px; height:50px; border-radius:16px; font-size:18px; }\n.login .brand span { font-size:26px; font-weight:800; color:var(--green); }\n.login h2 { font-size:30px; font-weight:800; color:var(--green); line-height:1.15; letter-spacing:-.02em; }\n.login .sub { color:var(--muted); font-size:14.5px; margin:8px 0 26px; line-height:1.45; }\n.field { display:flex; align-items:center; gap:12px; background:var(--card); border:1.5px solid var(--line);\n         border-radius:18px; padding:0 18px; height:56px; margin-bottom:12px; }\n.field .fic { color:var(--green); width:20px; text-align:center; }\n.field .ph { color:#9aa39c; font-weight:700; font-size:15px; flex:1; }\n.login .switch { text-align:center; margin-top:20px; font-size:14px; color:var(--muted); }\n.login .switch a { color:var(--coral); font-weight:800; cursor:pointer; }\n.only-register { display:none; }\n.login.register .only-register { display:flex; }\n\n/* ===== sheet lưu từ ===== */\n.overlay { position:absolute; inset:0; background:rgb(30 30 25 / .45); display:none;\n           align-items:center; justify-content:center; z-index:80; }\n.overlay.on { display:flex; }\n.sheet { width:310px; background:var(--card); border-radius:24px; padding:22px; }\n.sheet h3 { color:var(--green); font-size:20px; font-weight:800; margin-bottom:16px; }\n.outfield { border:1.8px solid var(--green); border-radius:14px; padding:12px 14px; position:relative; }\n.outfield label { position:absolute; top:-9px; left:12px; background:var(--card); padding:0 6px;\n                  font-size:12px; color:var(--green); font-weight:700; }\n.outfield input { width:100%; border:0; outline:none; background:transparent; font-size:17px;\n                  font-weight:600; font-family:inherit; color:var(--ink); }\n.helper { font-size:12px; color:var(--muted); margin:8px 0 18px; }\n.sheet-actions { display:flex; flex-direction:column; gap:6px; }\n.sheet-actions .huy { align-self:flex-end; background:none; border:0; color:var(--green);\n                      font-weight:800; font-size:15px; padding:8px 4px; cursor:pointer; font-family:inherit; }\n<\u002Fstyle>\n<\u002Fhead>\n<body>\n\n<div class=\"pagehead\">\n  <h1>lingua — Prototype v2<\u002Fh1>\n  <p>Mở app là dịch được ngay: ô nhập hiện luôn ở màn hình đầu, tự dịch khi gõ, mục \"Gần đây\" nằm ngay\n     dưới ô nhập (thay cho tab Lịch sử). 2 màn AI gộp 1, đăng nhập/đăng ký gộp 1 màn — 9 màn → 5 màn.\n     Android có dịch bằng giọng nói (Vosk), iOS dùng ô nhập chữ. Mọi thứ đều bấm được, 🔊 phát âm thật.<\u002Fp>\n<\u002Fdiv>\n\n<main class=\"frames\">\n  <section class=\"frame-col\">\n    <h2>lingua — iOS<\u002Fh2>\n    <p class=\"sub\">iPhone · 390×844 · SwiftUI-style<\u002Fp>\n    <div class=\"device ios\"><div class=\"app\" data-platform=\"ios\"><div class=\"notch\"><\u002Fdiv><div class=\"homebar\"><\u002Fdiv><\u002Fdiv><\u002Fdiv>\n  <\u002Fsection>\n  <section class=\"frame-col\">\n    <h2>lingua — Android<\u002Fh2>\n    <p class=\"sub\">Material · 390×844 · có Voice (Vosk)<\u002Fp>\n    <div class=\"device android\"><div class=\"app\" data-platform=\"android\"><div class=\"punch\"><\u002Fdiv><\u002Fdiv><\u002Fdiv>\n  <\u002Fsection>\n<\u002Fmain>\n\n<template id=\"tpl\">\n  <div class=\"statusbar\"><span>9:41<\u002Fspan><span class=\"icons\">▮▮▮ ⌁ ▉<\u002Fspan><\u002Fdiv>\n  <div class=\"body\">\n\n    <!-- ===== DỊCH (màn hình chính, mặc định) ===== -->\n    <div class=\"screen on\" data-screen=\"translate\">\n      <div class=\"shead\">\n        <div class=\"logo-tile\">文A<\u002Fdiv>\n        <h1 style=\"font-size:21px\">lingua<\u002Fh1>\n        <span class=\"spacer\"><\u002Fspan>\n        <button class=\"avatar\" data-go=\"profile\">N<\u002Fbutton>\n      <\u002Fdiv>\n      <div class=\"scroll\">\n        <div class=\"langbar\">\n          <div class=\"lang\">Tiếng Anh<\u002Fdiv>\n          <button class=\"swap\" data-act=\"swap\">⇄<\u002Fbutton>\n          <button class=\"lang\" data-act=\"tolang\">Tiếng Nhật ▾<\u002Fbutton>\n        <\u002Fdiv>\n        <div class=\"inputcard\">\n          <textarea rows=\"3\" placeholder=\"Nhập văn bản…\" data-el=\"input\"><\u002Ftextarea>\n          <div class=\"row\">\n            <button class=\"voice only-android\" data-act=\"voice\">🎙 <span>Nói để dịch<\u002Fspan><\u002Fbutton>\n            <span class=\"voicenote only-ios\">🎙 Voice chỉ có trên Android (Vosk)<\u002Fspan>\n            <span style=\"flex:1\"><\u002Fspan>\n            <button class=\"clear\" data-act=\"clear\">✕<\u002Fbutton>\n          <\u002Fdiv>\n        <\u002Fdiv>\n        <div class=\"resultcard\" data-el=\"result\">\n          <div class=\"rhead\">\n            <span class=\"rlang\" data-el=\"rlang\">TIẾNG NHẬT<\u002Fspan>\n            <span style=\"flex:1\"><\u002Fspan>\n            <button class=\"ric\" data-act=\"speak\" title=\"Phát âm\">🔊<\u002Fbutton>\n            <button class=\"ric\" data-act=\"copy\" title=\"Sao chép\">⧉<\u002Fbutton>\n          <\u002Fdiv>\n          <div class=\"rtext\" data-el=\"rtext\"><\u002Fdiv>\n        <\u002Fdiv>\n        <div class=\"wordscard\" data-el=\"wordscard\">\n          <div class=\"whead\">CHẠM TỪ ĐỂ LƯU VÀO SỔ TAY<\u002Fdiv>\n          <div class=\"chips\" data-el=\"chips\"><\u002Fdiv>\n        <\u002Fdiv>\n        <div data-el=\"recentswrap\">\n          <div class=\"recents-head\">\n            <span class=\"eyebrow\">GẦN ĐÂY<\u002Fspan>\n            <button class=\"cl\" data-act=\"clear-recents\">Xóa tất cả<\u002Fbutton>\n          <\u002Fdiv>\n          <div data-el=\"recents\"><\u002Fdiv>\n        <\u002Fdiv>\n      <\u002Fdiv>\n    <\u002Fdiv>\n\n    <!-- ===== AI (1 màn: trống + chat) ===== -->\n    <div class=\"screen\" data-screen=\"ai\">\n      <div class=\"shead\"><h1>Luyện cùng AI<\u002Fh1><\u002Fdiv>\n      <div class=\"scroll\" data-el=\"chatscroll\">\n        <div class=\"ai-empty\" data-el=\"aiempty\">\n          <div class=\"orb\">✦<\u002Fdiv>\n          <h3>Một người bạn để<br>luyện ngôn ngữ.<\u002Fh3>\n          <p>Hỏi ngữ pháp, thử hội thoại,<br>hoặc nhờ AI sửa câu.<\u002Fp>\n          <button class=\"sug\" data-act=\"sug\" data-q=\"Fix this sentence: I goes to school yesterday\">↗ Sửa câu này giúp mình<\u002Fbutton>\n          <button class=\"sug\" data-act=\"sug\" data-q=\"Luyện hội thoại ngắn với mình nhé\">↗ Luyện hội thoại ngắn<\u002Fbutton>\n        <\u002Fdiv>\n        <div data-el=\"msgs\"><\u002Fdiv>\n      <\u002Fdiv>\n      <div class=\"inputbar\">\n        <input placeholder=\"Viết tin nhắn cho AI…\" data-el=\"draft\">\n        <button class=\"send\" data-act=\"send\">↑<\u002Fbutton>\n      <\u002Fdiv>\n    <\u002Fdiv>\n\n    <!-- ===== SỔ TAY ===== -->\n    <div class=\"screen\" data-screen=\"vocab\">\n      <div class=\"shead\">\n        <h1>Sổ tay từ<\u002Fh1>\n        <span class=\"spacer\"><\u002Fspan>\n        <button class=\"btn small\" data-go=\"flashcard\">Luyện Flashcard<\u002Fbutton>\n      <\u002Fdiv>\n      <div class=\"scroll\" data-el=\"vocablist\"><\u002Fdiv>\n    <\u002Fdiv>\n\n    <!-- ===== FLASHCARD ===== -->\n    <div class=\"screen\" data-screen=\"flashcard\">\n      <div class=\"shead\">\n        <button class=\"back\" data-go=\"vocab\">‹<\u002Fbutton>\n        <h1>Flashcard<\u002Fh1>\n      <\u002Fdiv>\n      <div class=\"scroll\">\n        <p class=\"fc-count\" data-el=\"fccount\">Ôn tập hôm nay · 1 / 3<\u002Fp>\n        <div class=\"flash\" data-act=\"flip\">\n          <b data-el=\"fcword\">hello<\u002Fb>\n          <span class=\"ipa\" data-el=\"fcipa\">/həˈloʊ/<\u002Fspan>\n          <span class=\"meaning\" data-el=\"fcmean\">xin chào<\u002Fspan>\n          <span class=\"hint\">Chạm vào thẻ để xem nghĩa<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"display:flex;gap:12px\">\n          <button class=\"btn ghost\" style=\"flex:1;height:48px;font-size:14px\" data-act=\"fcspeak\">🔊 Phát âm<\u002Fbutton>\n          <button class=\"btn\" style=\"flex:1;height:48px;font-size:14px\" data-act=\"fcnext\">Thẻ tiếp theo →<\u002Fbutton>\n        <\u002Fdiv>\n      <\u002Fdiv>\n    <\u002Fdiv>\n\n    <!-- ===== CÁ NHÂN ===== -->\n    <div class=\"screen\" data-screen=\"profile\">\n      <div class=\"shead\"><h1>Cá nhân<\u002Fh1><\u002Fdiv>\n      <div class=\"scroll\">\n        <div class=\"banner\">\n          <div class=\"bav\">N<\u002Fdiv>\n          <div><b>Nguyễn Văn A<\u002Fb><p>user1@example.com<\u002Fp><\u002Fdiv>\n        <\u002Fdiv>\n        <div class=\"sect\">Tài khoản<\u002Fdiv>\n        <div class=\"card\">\n          <div class=\"prow\">\n            <div class=\"pic\">🔒<\u002Fdiv>\n            <div><b>Đổi mật khẩu<\u002Fb><p>Cập nhật thông tin bảo mật<\u002Fp><\u002Fdiv>\n            <span class=\"go\">›<\u002Fspan>\n          <\u002Fdiv>\n          <div class=\"prow\" data-act=\"logout\">\n            <div class=\"pic\" style=\"background:var(--coral-tint)\">⎋<\u002Fdiv>\n            <div><b style=\"color:var(--cranberry)\">Đăng xuất<\u002Fb><p>Thoát khỏi tài khoản trên thiết bị này<\u002Fp><\u002Fdiv>\n            <span class=\"go\">›<\u002Fspan>\n          <\u002Fdiv>\n        <\u002Fdiv>\n        <div class=\"card\" style=\"display:flex;gap:12px;align-items:center;padding:15px 16px\">\n          <span style=\"color:var(--coral);font-size:18px\">✦<\u002Fspan>\n          <p style=\"font-size:13.5px;line-height:1.5\">Một góc nhỏ để dịch, luyện tập và giữ lại những từ đáng nhớ.<\u002Fp>\n        <\u002Fdiv>\n      <\u002Fdiv>\n    <\u002Fdiv>\n  <\u002Fdiv>\n\n  <!-- ===== TAB BAR ===== -->\n  <div class=\"tabbar\" data-el=\"tabbar\"><\u002Fdiv>\n\n  <!-- ===== LOGIN/ĐĂNG KÝ (1 màn, phủ toàn bộ; mặc định đã đăng nhập) ===== -->\n  <div class=\"login\" data-el=\"login\">\n    <div class=\"brand\"><div class=\"logo-tile\">文A<\u002Fdiv><span>lingua<\u002Fspan><\u002Fdiv>\n    <h2 data-el=\"authtitle\">Chào mừng<br>quay trở lại.<\u002Fh2>\n    <p class=\"sub\" data-el=\"authsub\">Tiếp tục hành trình học ngôn ngữ của bạn, từng câu một.<\u002Fp>\n    <div class=\"field only-register\"><span class=\"fic\">👤<\u002Fspan><span class=\"ph\">Họ và tên<\u002Fspan><\u002Fdiv>\n    <div class=\"field\"><span class=\"fic\">@<\u002Fspan><span class=\"ph\">Email<\u002Fspan><\u002Fdiv>\n    <div class=\"field\"><span class=\"fic\">🔒<\u002Fspan><span class=\"ph\">Mật khẩu<\u002Fspan><span style=\"color:var(--green)\">👁<\u002Fspan><\u002Fdiv>\n    <button class=\"btn\" style=\"margin-top:10px\" data-act=\"dologin\" data-el=\"authbtn\">Đăng nhập<\u002Fbutton>\n    <p class=\"switch\"><span data-el=\"authq\">Chưa có tài khoản?<\u002Fspan> <a data-act=\"toggle-auth\" data-el=\"autha\">Đăng ký ngay<\u002Fa><\u002Fp>\n  <\u002Fdiv>\n\n  <!-- ===== SHEET LƯU TỪ ===== -->\n  <div class=\"overlay\" data-el=\"overlay\">\n    <div class=\"sheet\">\n      <h3 data-el=\"sheettitle\">Lưu từ \"morning\"<\u002Fh3>\n      <div class=\"outfield\">\n        <label>Nghĩa của từ *<\u002Flabel>\n        <input data-el=\"sheetmeaning\">\n      <\u002Fdiv>\n      <p class=\"helper\">Đã tự điền gợi ý, bạn có thể sửa lại<\u002Fp>\n      <div class=\"sheet-actions\">\n        <button class=\"huy\" data-act=\"sheet-close\">Hủy<\u002Fbutton>\n        <button class=\"btn\" style=\"height:52px;border-radius:16px\" data-act=\"sheet-save\">Lưu vào sổ tay<\u002Fbutton>\n      <\u002Fdiv>\n    <\u002Fdiv>\n  <\u002Fdiv>\n<\u002Ftemplate>\n\n<script>\nconst PHRASES = {\n  ja: {\n    'good morning, how are you today?': 'おはようございます、今日はどうですか？',\n    'good morning': 'おはようございます',\n    'hello': 'こんにちは',\n    'thank you': 'ありがとうございます',\n    'where is the nearest airport?': '最寄りの空港はどこですか？',\n    'i have a meeting tomorrow morning.': '明日の朝、会議があります。',\n    'how are you?': 'お元気ですか？'\n  },\n  vi: {\n    'good morning, how are you today?': 'Chào buổi sáng, hôm nay bạn thế nào?',\n    'good morning': 'Chào buổi sáng',\n    'hello': 'Xin chào',\n    'thank you': 'Cảm ơn bạn',\n    'where is the nearest airport?': 'Sân bay gần nhất ở đâu?',\n    'i have a meeting tomorrow morning.': 'Tôi có một cuộc họp vào sáng mai.',\n    'how are you?': 'Bạn khỏe không?'\n  }\n};\nconst DICT = {\n  ja: {good:'良い',morning:'朝',hello:'こんにちは',how:'どう',are:'です',you:'あなた',today:'今日',thank:'感謝',where:'どこ',nearest:'最寄り',airport:'空港',meeting:'会議',tomorrow:'明日',school:'学校',water:'水',beautiful:'美しい',journey:'旅',i:'私',have:'持つ',go:'行く',eat:'食べる',friend:'友達',love:'愛',book:'本',teacher:'先生',study:'勉強',is:'は',the:'',a:''},\n  vi: {good:'tốt',morning:'buổi sáng',hello:'xin chào',how:'thế nào',are:'là',you:'bạn',today:'hôm nay',thank:'cảm ơn',where:'ở đâu',nearest:'gần nhất',airport:'sân bay',meeting:'cuộc họp',tomorrow:'ngày mai',school:'trường học',water:'nước',beautiful:'xinh đẹp',journey:'hành trình',i:'tôi',have:'có',go:'đi',eat:'ăn',friend:'bạn bè',love:'yêu',book:'sách',teacher:'giáo viên',study:'học',is:'là',the:'',a:'một'}\n};\nconst TABS = [\n  { id:'translate', label:'Dịch',\n    ic:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M4 5h9M8.5 3v2c0 4-2.5 7-5 8.5M5 9c1.5 2.5 4.5 4.5 8 5\"/><path d=\"m13 21 4.5-10L22 21M14.8 17h5.4\"/><\u002Fsvg>' },\n  { id:'ai', label:'AI',\n    ic:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M12 3l1.7 4.6L18 9.2l-4.3 1.6L12 15.4l-1.7-4.6L6 9.2l4.3-1.6zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z\"/><\u002Fsvg>' },\n  { id:'vocab', label:'Sổ tay',\n    ic:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M6 3h12v18l-6-4-6 4z\"/><\u002Fsvg>' },\n  { id:'profile', label:'Cá nhân',\n    ic:'<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5\"/><\u002Fsvg>' },\n];\nconst TAB_ACTIVE = { translate:'translate', ai:'ai', vocab:'vocab', flashcard:'vocab', profile:'profile' };\n\nfunction esc(s){ return s.replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }\nfunction speak(text, lang){\n  try {\n    const u = new SpeechSynthesisUtterance(text);\n    u.lang = lang === 'ja' ? 'ja-JP' : (lang === 'vi' ? 'vi-VN' : 'en-US');\n    speechSynthesis.cancel(); speechSynthesis.speak(u);\n  } catch(e) {}\n}\nfunction translate(text, lang){\n  const t = text.trim(); if (!t) return '';\n  const p = PHRASES[lang][t.toLowerCase().replace(/\\s+/g,' ')];\n  if (p) return p;\n  const out = t.toLowerCase().replace(/[^a-z'\\s]/g,'').split(/\\s+/)\n    .map(w => DICT[lang][w] === undefined ? w : DICT[lang][w]).filter(Boolean);\n  return lang === 'ja' ? out.join('') : out.join(' ');\n}\nfunction aiReply(q){\n  if (/goes|went|yesterday/i.test(q))\n    return 'Câu đúng là: \"I went to school yesterday.\"\\n\\nHai lỗi nhỏ: goes → went (quá khứ đơn vì có \"yesterday\"), và chủ ngữ \"I\" không chia -es. Thử đặt một câu khác với \"went\" xem sao?';\n  if (/hội thoại|conversation|luyện/i.test(q))\n    return 'Được! Mình bắt đầu nhé — bằng tiếng Anh:\\n\\n\"Hi! What did you do last weekend?\"\\n\\nBạn trả lời thử, mình sẽ sửa giúp nếu có lỗi.';\n  return 'Ý hay đó! Gửi mình câu tiếng Anh cụ thể, mình sẽ sửa ngữ pháp và gợi ý cách nói tự nhiên hơn. (Trả lời mẫu của prototype)';\n}\n\ndocument.querySelectorAll('.app').forEach(app => {\n  app.appendChild(document.getElementById('tpl').content.cloneNode(true));\n  const $ = sel => app.querySelector(sel);\n  const el = name => app.querySelector(`[data-el=\"${name}\"]`);\n\n  const state = {\n    toLang: 'ja', authMode: 'login', fcIndex: 0,\n    saved: [\n      {w:'hello', ipa:'/həˈloʊ/', m:'xin chào', dir:'EN → VI'},\n      {w:'beautiful', ipa:'/ˈbjuː.tɪ.fəl/', m:'xinh đẹp', dir:'EN → VI'},\n      {w:'journey', ipa:'/ˈdʒɜːr.ni/', m:'hành trình', dir:'EN → VI'}\n    ],\n    recents: [\n      {src:'Good morning, how are you today?', dst:'おはようございます、今日はどうですか？', dir:'EN → JA', time:'08:28', lang:'ja'},\n      {src:'Where is the nearest airport?', dst:'Sân bay gần nhất ở đâu?', dir:'EN → VI', time:'Hôm qua', lang:'vi'},\n      {src:'I have a meeting tomorrow morning.', dst:'Tôi có một cuộc họp vào sáng mai.', dir:'EN → VI', time:'27/08', lang:'vi'}\n    ],\n    sheetWord: null\n  };\n\n  // tab bar\n  function renderTabs(screen){\n    el('tabbar').innerHTML = TABS.map(t => `\n      <button class=\"tab ${TAB_ACTIVE[screen] === t.id ? 'on' : ''}\" data-go=\"${t.id}\">\n        <span class=\"ipill\">${t.ic}<\u002Fspan>${t.label}\n      <\u002Fbutton>`).join('');\n  }\n\n  function show(id){\n    if (id !== 'translate' && el('input').value.trim()) pushRecent();\n    app.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.dataset.screen === id));\n    el('overlay').classList.remove('on');\n    renderTabs(id);\n    if (id === 'vocab') renderVocab();\n    if (id === 'flashcard') { state.fcIndex = 0; renderFlash(false); }\n  }\n\n  // ===== dịch =====\n  function renderTranslate(){\n    const text = el('input').value;\n    const result = translate(text, state.toLang);\n    el('result').style.display = result ? 'block' : 'none';\n    el('wordscard').style.display = result ? 'block' : 'none';\n    el('recentswrap').style.display = text.trim() ? 'none' : 'block';\n    $('.clear').style.display = text.trim() ? 'block' : 'none';\n    el('rlang').textContent = state.toLang === 'ja' ? 'TIẾNG NHẬT' : 'TIẾNG VIỆT';\n    el('rtext').textContent = result;\n    el('chips').innerHTML = text.trim() ? text.replace(/[.,!?]/g,'').split(/\\s+/).filter(Boolean).map(w => {\n      const known = !!DICT[state.toLang][w.toLowerCase()];\n      return `<button class=\"chip ${known ? 'known' : ''}\" data-word=\"${esc(w)}\">${esc(w)}<\u002Fbutton>`;\n    }).join('') : '';\n  }\n  function renderRecents(){\n    el('recents').innerHTML = state.recents.map((r, i) => `\n      <div class=\"rcard\" data-recent=\"${i}\">\n        <div class=\"meta\"><span class=\"pill ok\">${r.dir}<\u002Fspan><time>${r.time}<\u002Ftime><\u002Fdiv>\n        <div class=\"src\">${esc(r.src)}<\u002Fdiv>\n        <div class=\"dst\">${esc(r.dst)}<\u002Fdiv>\n      <\u002Fdiv>`).join('');\n  }\n  function pushRecent(){\n    const text = el('input').value.trim();\n    const dst = translate(text, state.toLang);\n    if (!text || !dst) return;\n    if (state.recents.length && state.recents[0].src === text) return;\n    const now = new Date();\n    state.recents.unshift({src:text, dst, dir:'EN → ' + (state.toLang === 'ja' ? 'JA' : 'VI'),\n      time: now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0'), lang: state.toLang});\n    state.recents = state.recents.slice(0, 8);\n    renderRecents();\n  }\n\n  // ===== sổ tay / flashcard =====\n  function renderVocab(){\n    el('vocablist').innerHTML = state.saved.length ? state.saved.map((s, i) => `\n      <div class=\"wcard\">\n        <div class=\"w\">\n          <b>${esc(s.w)}<\u002Fb><span class=\"ipa\">${s.ipa || ''}<\u002Fspan>\n          ${s.fresh ? '<span class=\"pill coral\" style=\"margin-left:6px\">mới lưu<\u002Fspan>' : ''}\n          <div class=\"mean\">${esc(s.m)}<\u002Fdiv>\n          <div class=\"dir\">${s.dir}<\u002Fdiv>\n        <\u002Fdiv>\n        <button class=\"act\" data-vspeak=\"${i}\">🔊<\u002Fbutton>\n        <button class=\"act\" data-vdel=\"${i}\">🗑<\u002Fbutton>\n      <\u002Fdiv>`).join('')\n      : '<p class=\"vocab-empty\">Chưa có từ nào.<br>Dịch một câu rồi chạm vào từ để lưu nhé.<\u002Fp>';\n  }\n  function renderFlash(flipped){\n    const list = state.saved;\n    const fc = list.length ? list[state.fcIndex % list.length] : null;\n    el('fcword').textContent = fc ? fc.w : 'Chưa có từ';\n    el('fcipa').textContent = fc ? fc.ipa : '';\n    el('fcmean').textContent = fc ? fc.m : '';\n    el('fccount').textContent = list.length\n      ? 'Ôn tập hôm nay · ' + ((state.fcIndex % list.length) + 1) + ' / ' + list.length\n      : 'Ôn tập hôm nay · 0 / 0';\n    $('.flash').classList.toggle('flipped', !!flipped);\n  }\n\n  // ===== AI =====\n  function addMsg(html){ el('msgs').insertAdjacentHTML('beforeend', html);\n    el('chatscroll').scrollTop = el('chatscroll').scrollHeight; }\n  function send(text){\n    const t = (text || '').trim(); if (!t) return;\n    el('aiempty').style.display = 'none';\n    addMsg(`<div class=\"bubble-user\"><div class=\"txt\">${esc(t)}<\u002Fdiv><\u002Fdiv>`);\n    el('draft').value = '';\n    setTimeout(() => addMsg(`<div class=\"bubble-ai\">${esc(aiReply(t))}<\u002Fdiv>`), 650);\n  }\n\n  // ===== auth =====\n  function renderAuth(){\n    const reg = state.authMode === 'register';\n    el('login').classList.toggle('register', reg);\n    el('authtitle').innerHTML = reg ? 'Tạo không gian<br>học của riêng bạn.' : 'Chào mừng<br>quay trở lại.';\n    el('authsub').textContent = reg ? 'Lưu lại từ mới, luyện nói và theo dõi tiến bộ mỗi ngày.'\n                                    : 'Tiếp tục hành trình học ngôn ngữ của bạn, từng câu một.';\n    el('authbtn').textContent = reg ? 'Bắt đầu học' : 'Đăng nhập';\n    el('authq').textContent = reg ? 'Đã có tài khoản?' : 'Chưa có tài khoản?';\n    el('autha').textContent = reg ? 'Đăng nhập' : 'Đăng ký ngay';\n  }\n\n  // ===== events =====\n  el('input').addEventListener('input', renderTranslate);\n  el('draft').addEventListener('keydown', e => { if (e.key === 'Enter') send(el('draft').value); });\n\n  app.addEventListener('click', e => {\n    const go = e.target.closest('[data-go]');\n    if (go) { show(go.dataset.go); return; }\n    const act = e.target.closest('[data-act]');\n    if (act) {\n      const a = act.dataset.act;\n      if (a === 'tolang') {\n        state.toLang = state.toLang === 'ja' ? 'vi' : 'ja';\n        act.textContent = (state.toLang === 'ja' ? 'Tiếng Nhật' : 'Tiếng Việt') + ' ▾';\n        renderTranslate();\n      }\n      if (a === 'swap' || a === 'clear') { pushRecent(); el('input').value = ''; renderTranslate(); }\n      if (a === 'speak') speak(el('rtext').textContent, state.toLang);\n      if (a === 'copy') { try { navigator.clipboard.writeText(el('rtext').textContent); } catch(err) {} }\n      if (a === 'voice') {\n        const lbl = act.querySelector('span');\n        lbl.textContent = 'Đang nghe…';\n        setTimeout(() => { lbl.textContent = 'Nói để dịch';\n          el('input').value = 'Where is the nearest airport?'; renderTranslate(); }, 1400);\n      }\n      if (a === 'clear-recents') { state.recents = []; renderRecents(); }\n      if (a === 'sug') send(act.dataset.q);\n      if (a === 'send') send(el('draft').value);\n      if (a === 'flip') $('.flash').classList.toggle('flipped');\n      if (a === 'fcnext') { state.fcIndex++; renderFlash(false); }\n      if (a === 'fcspeak') { const list = state.saved;\n        if (list.length) speak(list[state.fcIndex % list.length].w, 'en'); }\n      if (a === 'logout') { state.authMode = 'login'; renderAuth(); el('login').classList.add('on'); }\n      if (a === 'dologin') { el('login').classList.remove('on'); show('translate'); }\n      if (a === 'toggle-auth') { state.authMode = state.authMode === 'login' ? 'register' : 'login'; renderAuth(); }\n      if (a === 'sheet-close') el('overlay').classList.remove('on');\n      if (a === 'sheet-save') {\n        state.saved.unshift({w: state.sheetWord.toLowerCase(), ipa: '',\n          m: el('sheetmeaning').value || '—',\n          dir: 'EN → ' + (state.toLang === 'ja' ? 'JA' : 'VI'), fresh: true});\n        el('overlay').classList.remove('on');\n      }\n      return;\n    }\n    const chipEl = e.target.closest('[data-word]');\n    if (chipEl) {\n      state.sheetWord = chipEl.dataset.word;\n      el('sheettitle').textContent = `Lưu từ \"${state.sheetWord}\"`;\n      el('sheetmeaning').value = DICT[state.toLang][state.sheetWord.toLowerCase()] || '';\n      el('overlay').classList.add('on');\n      return;\n    }\n    const rec = e.target.closest('[data-recent]');\n    if (rec) {\n      const r = state.recents[+rec.dataset.recent];\n      state.toLang = r.lang;\n      $('.langbar [data-act=\"tolang\"]').textContent = (r.lang === 'ja' ? 'Tiếng Nhật' : 'Tiếng Việt') + ' ▾';\n      el('input').value = r.src; renderTranslate();\n      return;\n    }\n    const vs = e.target.closest('[data-vspeak]');\n    if (vs) { speak(state.saved[+vs.dataset.vspeak].w, 'en'); return; }\n    const vd = e.target.closest('[data-vdel]');\n    if (vd) { state.saved.splice(+vd.dataset.vdel, 1); renderVocab(); return; }\n    if (e.target === el('overlay')) el('overlay').classList.remove('on');\n  });\n\n  renderTabs('translate');\n  renderTranslate();\n  renderRecents();\n});\n<\u002Fscript>\n\n\n<\u002Fbody><\u002Fhtml>"
+  </script>
+</body>
+</html>

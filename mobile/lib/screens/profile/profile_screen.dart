@@ -1,11 +1,44 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/backend_status.dart';
+import '../../core/offline_packs.dart';
+import '../../core/sync_queue.dart';
 import '../../core/theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/offline_packs_service.dart';
+import '../../widgets/connection_banner.dart';
 import '../auth/login_screen.dart';
+import '../models/offline_models_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final _packsService = OfflinePacksService();
+  DownloadedPacks? _packs; // null = đang kiểm tra
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshPacks();
+    // Tải/xóa gói ở bất kỳ màn nào cũng làm danh sách này tự cập nhật.
+    OfflinePacks.changes.addListener(_refreshPacks);
+  }
+
+  @override
+  void dispose() {
+    OfflinePacks.changes.removeListener(_refreshPacks);
+    super.dispose();
+  }
+
+  Future<void> _refreshPacks() async {
+    final packs = await _packsService.getDownloaded();
+    if (mounted) setState(() => _packs = packs);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -16,16 +49,7 @@ class ProfileScreen extends StatelessWidget {
     final initial = displayName.substring(0, 1).toUpperCase();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cá nhân'),
-        actions: [
-          IconButton(
-            tooltip: 'Cài đặt tài khoản',
-            icon: const Icon(Icons.tune_rounded),
-            onPressed: () => _showChangePasswordDialog(context),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Cá nhân')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
           AppTheme.spaceMd,
@@ -74,7 +98,9 @@ class ProfileScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        user?.email ?? 'Bắt đầu hành trình của bạn',
+                        auth.isGuest
+                            ? 'Chế độ khách · dữ liệu lưu trên máy này'
+                            : (user?.email ?? 'Bắt đầu hành trình của bạn'),
                         style: TextStyle(
                           color: AppTheme.ivory.withValues(alpha: .72),
                           fontSize: 13,
@@ -87,34 +113,71 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
+          const ConnectionBanner(),
+          Text('Ngoại tuyến', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 10),
+          Card(
+            child: _ProfileAction(
+              icon: Icons.download_for_offline_outlined,
+              title: 'Gói ngoại tuyến',
+              subtitle: _packs == null
+                  ? 'Đang kiểm tra…'
+                  : 'Đã tải: ${_packs!.summary}',
+              onTap: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const OfflineModelsScreen()),
+                );
+                _refreshPacks();
+              },
+            ),
+          ),
+          const SizedBox(height: 24),
           Text('Tài khoản', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 10),
           Card(
             child: Column(
-              children: [
-                _ProfileAction(
-                  icon: Icons.lock_outline_rounded,
-                  title: 'Đổi mật khẩu',
-                  subtitle: 'Cập nhật thông tin bảo mật',
-                  onTap: () => _showChangePasswordDialog(context),
-                ),
-                const Divider(indent: 62, endIndent: 16),
-                _ProfileAction(
-                  icon: Icons.logout_rounded,
-                  title: 'Đăng xuất',
-                  subtitle: 'Thoát khỏi tài khoản trên thiết bị này',
-                  destructive: true,
-                  onTap: () async {
-                    await context.read<AuthProvider>().logout();
-                    if (context.mounted) {
-                      Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (_) => const LoginScreen()),
-                        (route) => false,
-                      );
-                    }
-                  },
-                ),
-              ],
+              children: auth.isGuest
+                  ? [
+                      _ProfileAction(
+                        icon: Icons.login_rounded,
+                        title: 'Đăng nhập / Đăng ký',
+                        subtitle: 'Đồng bộ từ vựng và lịch sử, dùng AI',
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const LoginScreen()),
+                        ),
+                      ),
+                      const Divider(indent: 62, endIndent: 16),
+                      _ProfileAction(
+                        icon: Icons.logout_rounded,
+                        title: 'Thoát chế độ khách',
+                        subtitle: 'Dữ liệu khách vẫn được giữ trên máy này',
+                        destructive: true,
+                        onTap: () => _logout(context),
+                      ),
+                    ]
+                  : [
+                      _ProfileAction(
+                        icon: Icons.sync_rounded,
+                        title: 'Đồng bộ ngay',
+                        subtitle: 'Gửi các thay đổi đã lưu khi ngoại tuyến lên máy chủ',
+                        onTap: () => _syncNow(context),
+                      ),
+                      const Divider(indent: 62, endIndent: 16),
+                      _ProfileAction(
+                        icon: Icons.lock_outline_rounded,
+                        title: 'Đổi mật khẩu',
+                        subtitle: 'Cập nhật thông tin bảo mật (cần mạng)',
+                        onTap: () => _showChangePasswordDialog(context),
+                      ),
+                      const Divider(indent: 62, endIndent: 16),
+                      _ProfileAction(
+                        icon: Icons.logout_rounded,
+                        title: 'Đăng xuất',
+                        subtitle: 'Thoát khỏi tài khoản trên thiết bị này',
+                        destructive: true,
+                        onTap: () => _logout(context),
+                      ),
+                    ],
             ),
           ),
           const SizedBox(height: 24),
@@ -138,6 +201,36 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _logout(BuildContext context) async {
+    await context.read<AuthProvider>().logout();
+    if (context.mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
+  Future<void> _syncNow(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    BackendStatus.reset();
+    final queue = SyncQueue();
+    final before = await queue.pendingCount();
+    final done = await queue.flush();
+    final after = await queue.pendingCount();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          done
+              ? (before == 0
+                  ? 'Mọi thứ đã được đồng bộ'
+                  : 'Đã đồng bộ $before thay đổi')
+              : 'Chưa kết nối được máy chủ — còn $after thay đổi chờ đồng bộ',
+        ),
       ),
     );
   }

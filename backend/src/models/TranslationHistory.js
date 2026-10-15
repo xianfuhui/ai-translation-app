@@ -15,7 +15,7 @@ const segmentSchema = new mongoose.Schema(
 
 const translationHistorySchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     sourceLanguage: { type: String, required: true },
     targetLanguage: { type: String, required: true },
     // Dùng cho type 'text' / 'speech' (1 lượt dịch đơn lẻ)
@@ -53,5 +53,12 @@ translationHistorySchema.pre('validate', function (next) {
   }
   next();
 });
+
+// Index khớp đúng query thật (xem historyController):
+// - GET /api/history: find({user}) + sort({createdAt:-1}) + phân trang -> compound index
+//   để tránh SORT stage in-memory (Mongo giới hạn sort không index ở 100MB).
+// - GET /api/history/admin/all: sort createdAt toàn hệ thống + lọc theo khoảng ngày.
+translationHistorySchema.index({ user: 1, createdAt: -1 });
+translationHistorySchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('TranslationHistory', translationHistorySchema);

@@ -17,6 +17,10 @@ dependencies:
   # Lưu JWT token an toàn trên thiết bị
   flutter_secure_storage: ^9.2.2
 
+  # Offline-first: local cache for history / vocabulary / languages / model
+  # registry and the pending-sync queue (see lib/core/local_store.dart).
+  shared_preferences: ^2.3.2
+
   # Quản lý state
   provider: ^6.1.2
 
@@ -34,6 +38,9 @@ dependencies:
   # Lưu ý: 0.4.0 KHÔNG tồn tại trên pub.dev, bản mới nhất hiện tại là 0.3.48.
   vosk_flutter: ^0.3.48
   permission_handler: ^11.3.1
+
+  # Giải nén model Vosk (.zip) sau khi tự tải để hiện được % tiến độ
+  archive: ^3.6.1
 
 dev_dependencies:
   flutter_test:

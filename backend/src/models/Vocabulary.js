@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const vocabularySchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     word: { type: String, required: true, trim: true },
     meaning: { type: String, required: true, trim: true },
     sourceLanguage: { type: String, trim: true },
@@ -18,5 +18,7 @@ const vocabularySchema = new mongoose.Schema(
 );
 
 vocabularySchema.index({ user: 1, word: 1, targetLanguage: 1 }, { unique: true });
+// GET /api/vocabulary: find({user, inFlashcard?}) + sort({createdAt:-1}) -> compound index khớp query
+vocabularySchema.index({ user: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Vocabulary', vocabularySchema);

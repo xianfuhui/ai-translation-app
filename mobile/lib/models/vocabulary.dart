@@ -10,6 +10,10 @@ class VocabularyItem {
   final String? phonetic; // phiên âm (dấu phát âm), vd: /wɜːrd/
   // Chỉ có ý nghĩa với từ trong Kho hệ thống: từ này đã có trong sổ tay của tôi chưa
   final bool inMyVocabulary;
+  // Thời điểm lưu (Mongoose timestamps) — UI v2 dùng để gắn nhãn "mới lưu".
+  final DateTime? createdAt;
+  // Topic of a system-vocabulary word (used to filter the cached bank offline).
+  final String? category;
 
   VocabularyItem({
     required this.id,
@@ -22,6 +26,8 @@ class VocabularyItem {
     this.audioUrl,
     this.phonetic,
     this.inMyVocabulary = false,
+    this.createdAt,
+    this.category,
   });
 
   factory VocabularyItem.fromJson(Map<String, dynamic> json) {
@@ -36,6 +42,26 @@ class VocabularyItem {
       audioUrl: json['audioUrl'],
       phonetic: json['phonetic'],
       inMyVocabulary: json['inMyVocabulary'] ?? false,
+      createdAt: json['createdAt'] != null
+          ? DateTime.tryParse(json['createdAt'] as String)
+          : null,
+      category: json['category'] as String?,
     );
   }
+
+  /// Local cache format (same field names as the server documents).
+  Map<String, dynamic> toJson() => {
+        '_id': id,
+        'word': word,
+        'meaning': meaning,
+        'sourceLanguage': sourceLanguage,
+        'targetLanguage': targetLanguage,
+        'source': source,
+        'inFlashcard': inFlashcard,
+        'audioUrl': audioUrl,
+        'phonetic': phonetic,
+        'inMyVocabulary': inMyVocabulary,
+        'createdAt': createdAt?.toUtc().toIso8601String(),
+        'category': category,
+      };
 }

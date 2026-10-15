@@ -1,38 +1,40 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import '../../core/local_store.dart';
+import '../../core/offline_packs.dart';
 import '../../core/theme.dart';
 import '../../models/language.dart';
 import '../../models/history.dart';
 import '../../models/model_config.dart';
 import '../../services/language_service.dart';
 import '../../services/history_service.dart';
-import '../../services/vocabulary_service.dart';
 import '../../services/translation_service.dart';
 import '../../services/model_service.dart';
 import '../../services/vosk_service.dart';
+import '../../widgets/brand_mark.dart';
+import '../../widgets/connection_banner.dart';
+import '../home_screen.dart';
 
-/// Màn hình Dịch ngôn ngữ.
+/// Màn hình Dịch — MÀN HÌNH CHÍNH của app (UI v2).
 ///
-/// LƯU Ý VỀ OFFLINE:
-/// - Danh sách ngôn ngữ tải 1 lần từ backend rồi cache lại để dùng offline.
-/// - Speech-to-Text dùng gói `vosk_flutter` (chính chủ alphacep, bản 0.3.48) —
-///   ghi âm mic thật, tự tải model theo cấu hình Admin qua `ModelService`,
-///   nhận diện offline hoàn toàn (xem `VoskService`).
-/// - Text-to-Speech dùng `flutter_tts` (dùng engine TTS hệ thống, tương đương
-///   mục tiêu của ML Kit trên Android).
-/// - DỊCH văn bản dùng Google ML Kit Translation (`google_mlkit_translation`),
-///   chạy hoàn toàn offline sau khi model ngôn ngữ được tải về máy lần đầu.
-///   Mã ngôn ngữ dùng để dịch lấy từ kho Model (`type: "mlkit"`) do Admin cấu
-///   hình trong Web Admin → Model (Vosk/ML Kit); nếu Admin chưa cấu hình,
-///   dùng tạm mã ngôn ngữ (`Language.code`) làm mặc định.
+/// Thay đổi so với v1:
+/// - Mở app là dịch được ngay: ô nhập luôn hiện, TỰ DỊCH khi gõ (debounce),
+///   không còn nút "Dịch câu này".
+/// - Lịch sử nằm ở tab riêng (HistoryScreen).
+/// - Kết quả hiện trong card XANH ĐẬM với nút 🔊 phát âm + sao chép.
+/// - Chips TỪ NGUỒN bên dưới kết quả: chạm từ để lưu vào sổ tay (từ đã lưu
+///   được tô viền xanh). Lịch sử chỉ lưu khi "chốt" câu (xoá ô nhập / đổi
+///   chiều / mở câu khác) để auto-translate không spam mỗi ký tự.
 ///
-/// CHẾ ĐỘ DỊCH TRỰC TIẾP:
-/// Nút "Dịch" hoạt động như 1 công tắc Bắt đầu/Dừng:
-/// - Bấm lần 1 (Bắt đầu): xin quyền mic, tải/nạp model Vosk theo ngôn ngữ
-///   nguồn (cấu hình ở Web Admin → Ngôn ngữ & Model), rồi mở mic nghe liên
-///   tục — mỗi khi nhận diện xong 1 câu, tự động dịch ngay bằng ML Kit.
-/// - Bấm lần 2 (Dừng): tắt mic, dừng vòng lặp nhận diện + dịch (model Vosk
-///   vẫn giữ trong bộ nhớ nên lần Bắt đầu sau không cần tải lại).
+/// OFFLINE (giữ nguyên từ v1): danh sách ngôn ngữ cache; dịch bằng ML Kit
+/// on-device (model tự tải lần đầu); TTS hệ thống qua flutter_tts.
+///
+/// DỊCH GIỌNG NÓI (chỉ Android — vosk_flutter không có iOS): nút "Nói để dịch"
+/// trong ô nhập bật/tắt phiên nghe liên tục; mỗi câu nhận diện xong tự dịch +
+/// đọc to; cả phiên được lưu thành MỘT mục lịch sử "conversation" khi Dừng.
 class TranslateScreen extends StatefulWidget {
   const TranslateScreen({super.key});
 
@@ -43,7 +45,6 @@ class TranslateScreen extends StatefulWidget {
 class _TranslateScreenState extends State<TranslateScreen> {
   final _languageService = LanguageService();
   final _historyService = HistoryService();
-  final _vocabularyService = VocabularyService();
   final _modelService = ModelService();
   final _translationService = TranslationService();
   final _voskService = VoskService();
@@ -56,25 +57,61 @@ class _TranslateScreenState extends State<TranslateScreen> {
   String _translatedText = '';
   bool _loadingLanguages = true;
   bool _isTranslating = false;
-  String?
-      _downloadingModelLabel; // hiện khi đang tải model ML Kit / Vosk lần đầu
+  String? _downloadingModelLabel;
+  double? _downloadProgress; // null = chưa biết % (thanh chạy)
+  CancelToken? _downloadCancel;
 
-  // Trạng thái chế độ dịch trực tiếp (start/stop)
+  // Auto-translate khi gõ: debounce để không dịch từng ký tự.
+  Timer? _debounce;
+  static const _debounceDelay = Duration(milliseconds: 350);
+
+  // --- Tăng tốc dịch ---
+  // Số thứ tự lượt dịch: kết quả của lượt cũ (đến muộn) bị bỏ, không đè câu mới.
+  int _translateSeq = 0;
+  // Bộ nhớ 50 bản dịch gần nhất: gõ lại / đảo chiều / xoá rồi gõ lại -> hiện ngay.
+  final _translationCache = <String, String>{};
+  static const _cacheSize = 50;
+  // Gói ML Kit đã biết là có trên máy -> khỏi hỏi lại native mỗi lần dịch.
+  final Set<String> _readyModels = {};
+  String? _ttsLanguage;
+
+  // Tự đọc to bản dịch sau mỗi câu khi ghi âm (bật/tắt, nhớ lựa chọn).
+  // Tắt = mic KHÔNG bị tạm dừng nên nghe liên tục, mượt hơn.
+  bool _autoSpeak = true;
+  final _prefs = LocalStore();
+  Future<void>? _voskPreload; // nạp sẵn model Vosk cho ngôn ngữ nguồn
+  // Câu cuối cùng ĐÃ lưu lịch sử — tránh lưu trùng khi "chốt" nhiều lần.
+  String _lastCommittedText = '';
+
+  // Từ đã có trong sổ tay (lowercase) — để tô sáng chip.
+
+  // ===== Trạng thái dịch trực tiếp (giữ nguyên logic v1) =====
   bool _isLiveTranslating = false;
-  // Gom tất cả các lượt nói trong 1 phiên Bắt đầu -> Dừng để khi Dừng chỉ lưu
-  // MỘT mục lịch sử duy nhất (thay vì mỗi câu 1 mục).
+  bool _micPaused = false; // mic tạm tắt (đang tải model giữa phiên nói)
+  // Mic chỉ thật sự mở khi phiên đã sẵn sàng và không bị tạm dừng.
+  bool get _isMicOn => _isLiveTranslating && !_isStartingLive && !_micPaused;
+  bool _isStartingLive = false;
+  int _liveSessionId = 0;
+  Future<void> _recognitionQueue = Future.value();
   final List<HistorySegment> _sessionSegments = [];
   DateTime? _sessionStartedAt;
 
-  // Chỉ số các từ đang được CHỌN để ghép thành 1 cụm từ (vd: "đàn" + "bà" ->
-  // "đàn bà") trước khi lưu vào từ vựng - tránh lỗi chỉ lưu được đúng 1 âm tiết
-  // với các từ ghép. Theo dõi riêng cho câu gốc và câu dịch vì là 2 danh sách
-  // từ độc lập.
-  final Set<int> _selectedSourceWordIdx = {};
-  final Set<int> _selectedTargetWordIdx = {};
+  @override
+  void initState() {
+    super.initState();
+    _loadLanguages();
+    _loadAutoSpeakPref();
+    _tts.awaitSpeakCompletion(true);
+    _inputController.addListener(_onInputChanged);
+    OfflinePacks.changes.addListener(_onPacksChanged);
+  }
 
   @override
   void dispose() {
+    _liveSessionId++;
+    OfflinePacks.changes.removeListener(_onPacksChanged);
+    _downloadCancel?.cancel();
+    _debounce?.cancel();
     _inputController.dispose();
     _tts.stop();
     _translationService.dispose();
@@ -95,6 +132,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
     super.dispose();
   }
 
+  // ===== Data bootstrap =====
+
   Future<void> _loadLanguages() async {
     try {
       final langs = await _languageService.getLanguages();
@@ -106,6 +145,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
         }
         _loadingLanguages = false;
       });
+      _warmUpTranslator();
+      _preloadVosk();
     } catch (e) {
       setState(() => _loadingLanguages = false);
       if (!mounted) return;
@@ -115,38 +156,213 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _loadLanguages();
+  // ===== Auto-translate (debounce) =====
+
+  Future<void> _loadAutoSpeakPref() async {
+    try {
+      final v = await _prefs.readJson(LocalKeys.autoSpeak);
+      if (v is bool && mounted) setState(() => _autoSpeak = v);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleAutoSpeak() async {
+    final next = !_autoSpeak;
+    setState(() => _autoSpeak = next);
+    if (!next) await _tts.stop(); // đang đọc dở thì dừng luôn
+    try {
+      await _prefs.writeJson(LocalKeys.autoSpeak, next);
+    } catch (_) {}
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(next
+            ? 'Đã bật đọc to bản dịch khi ghi âm'
+            : 'Đã tắt đọc to bản dịch khi ghi âm'),
+      ));
+  }
+
+  /// Có gói được tải/xóa ở nơi khác -> bỏ các ghi nhớ cũ.
+  void _onPacksChanged() {
+    _readyModels.clear();
+    _mlkitCodeCache.clear();
+    _translationCache.clear();
+  }
+
+  /// Đang tải model -> tạm ngưng việc dịch để tập trung tải (không dịch song
+  /// song, không nạp sẵn). Gõ thêm chữ vẫn được; dịch tiếp khi tải xong.
+  bool get _isDownloading => _downloadingModelLabel != null;
+  bool _translatePending = false;
+
+  void _onInputChanged() {
+    if (_isLiveTranslating) return; // phiên nói: text do Vosk đổ vào
+    setState(() {}); // cập nhật nút ✕
+    _debounce?.cancel();
+    final text = _inputController.text.trim();
+    if (text.isEmpty) {
+      setState(() => _translatedText = '');
+      return;
+    }
+    _debounce = Timer(_debounceDelay, _handleTranslateOnce);
+  }
+
+  Future<void> _handleTranslateOnce() async {
+    final text = _inputController.text.trim();
+    if (text.isEmpty || _sourceLang == null || _targetLang == null) return;
+    if (_isDownloading) {
+      _translatePending = true; // dịch sau khi tải xong
+      return;
+    }
+
+    final from = _sourceLang!.code;
+    final to = _targetLang!.code;
+    final key = '$from>$to|$text';
+
+    // Đã dịch câu này rồi -> hiện ngay, không gọi ML Kit.
+    final hit = _translationCache.remove(key);
+    if (hit != null) {
+      _translationCache[key] = hit; // đưa lên "mới dùng gần nhất"
+      _translateSeq++;
+      setState(() {
+        _translatedText = hit;
+        _isTranslating = false;
+      });
+      return;
+    }
+
+    final seq = ++_translateSeq;
+    setState(() => _isTranslating = true);
+    try {
+      final result = await _translateBetween(text, from, to);
+      if (!mounted || seq != _translateSeq) return; // đã có lượt dịch mới hơn
+      _translationCache[key] = result;
+      if (_translationCache.length > _cacheSize) {
+        _translationCache.remove(_translationCache.keys.first);
+      }
+      if (_inputController.text.trim() == text) {
+        setState(() => _translatedText = result);
+      }
+    } catch (e) {
+      if (!mounted || seq != _translateSeq) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_errorText(e, 'Dịch thất bại'))));
+    } finally {
+      if (mounted && seq == _translateSeq) setState(() => _isTranslating = false);
+    }
+  }
+
+  /// "Chốt" câu hiện tại vào lịch sử (gọi khi xoá ô nhập / đổi chiều / mở câu
+  /// khác) — auto-translate không tự lưu để tránh spam lịch sử mỗi ký tự.
+  void _commitCurrentToHistory() {
+    final text = _inputController.text.trim();
+    if (text.isEmpty || _translatedText.isEmpty) return;
+    if (text == _lastCommittedText) return;
+    if (_sourceLang == null || _targetLang == null) return;
+    _lastCommittedText = text;
+    _ignoreHistoryFailure(
+      _historyService.createHistory(
+        sourceLanguage: _sourceLang!.code,
+        targetLanguage: _targetLang!.code,
+        sourceText: text,
+        translatedText: _translatedText,
+      ),
+    );
+  }
+
+  void _clearInput() {
+    _commitCurrentToHistory();
+    _debounce?.cancel();
+    setState(() {
+      _inputController.clear();
+      _translatedText = '';
+    });
   }
 
   void _swapLanguages() {
-    if (_isLiveTranslating) {
-      return; // không đổi ngôn ngữ khi đang dịch trực tiếp
-    }
+    if (_isLiveTranslating) return;
+    _commitCurrentToHistory();
     setState(() {
       final tmp = _sourceLang;
       _sourceLang = _targetLang;
       _targetLang = tmp;
     });
+    if (_inputController.text.trim().isNotEmpty) _handleTranslateOnce();
+    _warmUpTranslator();
+    _preloadVosk();
   }
 
-  /// Lấy mã ngôn ngữ dùng để dịch bằng ML Kit: ưu tiên `identifier` của model
-  /// loại "mlkit" mà Admin đã cấu hình cho ngôn ngữ này; nếu chưa cấu hình,
-  /// dùng tạm mã ngôn ngữ (`Language.code`) làm mặc định.
+  // ===== Dịch (ML Kit, giữ nguyên v1) =====
+
+  // Languages whose ML Kit model is already on the device never need the
+  // backend again, so remember the resolved code in memory.
+  final Map<String, String> _mlkitCodeCache = {};
+
   Future<String> _resolveMlkitCode(String languageCode) async {
-    try {
-      final model = await _modelService.getActiveMlkitModel(languageCode);
-      if (model != null) return model.identifier;
-    } catch (_) {
-      // Không lấy được cấu hình từ backend (vd mất mạng) - dùng mặc định bên dưới
+    final cached = _mlkitCodeCache[languageCode];
+    if (cached != null) return cached;
+    // Fast path (works offline / as guest): plain code, model already downloaded.
+    if (_translationService.isSupported(languageCode) &&
+        await _isModelReady(languageCode)) {
+      return _mlkitCodeCache[languageCode] = languageCode;
     }
-    return languageCode;
+    // Otherwise let an admin-configured identifier win (backend or its cache).
+    // Giới hạn 2 giây: máy chủ chậm/mất mạng không được làm treo việc dịch.
+    try {
+      final model = await _modelService
+          .getActiveMlkitModel(languageCode)
+          .timeout(const Duration(seconds: 2));
+      return _mlkitCodeCache[languageCode] = model?.identifier ?? languageCode;
+    } catch (_) {
+      return languageCode; // không cache: lần sau thử lại
+    }
   }
 
-  /// Đảm bảo model dịch của 1 ngôn ngữ đã có sẵn trên máy, tự tải nếu chưa có
-  /// (chỉ tải 1 lần, các lần dịch sau dùng lại model đã tải).
+  /// Nạp sẵn model ML Kit của cặp ngôn ngữ đang chọn (chỉ khi đã tải, không
+  /// bao giờ tự tải). Gọi lúc mở màn / đổi ngôn ngữ / bắt đầu ghi âm.
+  Future<void> _warmUpTranslator() async {
+    final from = _sourceLang, to = _targetLang;
+    if (from == null || to == null || _isDownloading) return;
+    try {
+      final codes = await Future.wait([
+        _resolveMlkitCode(from.code),
+        _resolveMlkitCode(to.code),
+      ]);
+      if (!_translationService.isSupported(codes[0]) ||
+          !_translationService.isSupported(codes[1])) {
+        return;
+      }
+      if (!await _isModelReady(codes[0]) || !await _isModelReady(codes[1])) return;
+      await _translationService.warmUp(sourceCode: codes[0], targetCode: codes[1]);
+    } catch (_) {}
+  }
+
+  /// Nạp sẵn model Vosk (nếu đã cài trên máy) để bấm "Nói để dịch" là nghe được
+  /// ngay, không phải đợi nạp model. Không tải mạng, không gọi máy chủ.
+  void _preloadVosk() {
+    if (!VoskService.isSupported || _sourceLang == null) return;
+    final code = _sourceLang!.code;
+    _voskPreload = () async {
+      try {
+        final config = await _modelService.getInstalledVosk(code);
+        if (config == null) return;
+        final url = _modelService.getDownloadUrl(config);
+        if (url == null || url.isEmpty) return;
+        if (!await _voskService.isModelDownloaded(url)) return;
+        if (_isLiveTranslating || _isStartingLive || _isDownloading) return;
+        await _voskService.loadModel(url);
+      } catch (_) {}
+    }();
+  }
+
+  /// Gói đã có trên máy? Hỏi ML Kit (native) tối đa 1 lần cho mỗi ngôn ngữ.
+  Future<bool> _isModelReady(String code) async {
+    if (_readyModels.contains(code)) return true;
+    final ok = await _translationService.isModelDownloaded(code);
+    if (ok) _readyModels.add(code);
+    return ok;
+  }
+
   Future<void> _ensureModelDownloaded(
     String mlkitCode,
     String displayName,
@@ -156,21 +372,67 @@ class _TranslateScreenState extends State<TranslateScreen> {
         'ML Kit chưa hỗ trợ ngôn ngữ "$mlkitCode" (cấu hình lại ở Web Admin → Model)',
       );
     }
-    final downloaded = await _translationService.isModelDownloaded(mlkitCode);
-    if (downloaded) return;
-
-    if (mounted) setState(() => _downloadingModelLabel = displayName);
+    if (await _isModelReady(mlkitCode)) return;
+    final cancel = CancelToken();
+    // Đang trong phiên nói -> tắt mic trong lúc tải để tập trung tải (và để
+    // người dùng thấy rõ mic không còn bật).
+    final pauseMic = _isLiveTranslating && !_isStartingLive;
+    if (pauseMic) {
+      await _voskService.pauseListening();
+      if (mounted) setState(() => _micPaused = true);
+    }
+    if (mounted) {
+      setState(() {
+        _downloadingModelLabel = displayName;
+        _downloadProgress = null; // ML Kit không báo % -> thanh chạy
+        _downloadCancel = cancel;
+      });
+    }
     try {
-      await _translationService.downloadModel(mlkitCode);
+      await _translationService.downloadModel(mlkitCode, cancel: cancel);
+      OfflinePacks.notifyChanged(); // (xoá các ghi nhớ cũ)
+      _readyModels.add(mlkitCode);
+    } on DownloadCancelled {
+      rethrow;
+    } on NoInternetException {
+      throw NoInternetException(
+        'Không có mạng để tải gói ngôn ngữ "$displayName". '
+        'Hãy kết nối mạng rồi thử lại (chỉ cần tải một lần).',
+      );
+    } catch (_) {
+      throw Exception(
+        'Chưa có gói ngôn ngữ "$displayName" trên máy và không tải được. '
+        'Vào Cá nhân → Gói ngoại tuyến để tải trước.',
+      );
     } finally {
-      if (mounted) setState(() => _downloadingModelLabel = null);
+      if (pauseMic) {
+        _micPaused = false;
+        if (_isLiveTranslating) await _voskService.resumeListening();
+      }
+      if (mounted) _clearDownloadState();
     }
   }
 
-  /// Dịch offline bằng ML Kit giữa 2 mã ngôn ngữ bất kỳ (không nhất thiết phải
-  /// đúng chiều nguồn -> đích hiện tại), tự tải model nếu máy chưa có.
-  /// Dùng để: dịch cả câu (chiều nguồn -> đích) VÀ gợi ý nghĩa 1 từ đơn lẻ
-  /// theo chiều ngược lại khi người dùng chạm vào từ trong câu đã dịch.
+  void _clearDownloadState() {
+    setState(() {
+      _downloadingModelLabel = null;
+      _downloadProgress = null;
+      _downloadCancel = null;
+    });
+    // Tải xong (hoặc huỷ) -> dịch lại câu người dùng đã gõ trong lúc chờ.
+    if (_translatePending && !_isLiveTranslating) {
+      _translatePending = false;
+      _handleTranslateOnce();
+    }
+  }
+
+  /// Nội dung snackbar cho lỗi dịch / tải model (huỷ & không có mạng nói gọn).
+  String _errorText(Object e, String prefix) {
+    if (e is DownloadCancelled) return 'Đã hủy tải model';
+    if (e is NoInternetException) return e.message;
+    return '$prefix: $e';
+  }
+
   String _langNameForCode(String code) {
     try {
       return _languages.firstWhere((l) => l.code == code).name;
@@ -184,12 +446,16 @@ class _TranslateScreenState extends State<TranslateScreen> {
     String fromCode,
     String toCode,
   ) async {
-    final resolvedFrom = await _resolveMlkitCode(fromCode);
-    final resolvedTo = await _resolveMlkitCode(toCode);
-
+    // Hai ngôn ngữ kiểm tra song song (trước đây nối tiếp nhau).
+    final resolved = await Future.wait([
+      _resolveMlkitCode(fromCode),
+      _resolveMlkitCode(toCode),
+    ]);
+    final resolvedFrom = resolved[0];
+    final resolvedTo = resolved[1];
+    // Tải tuần tự (chung 1 banner + 1 nút Hủy); gói đã sẵn thì qua ngay.
     await _ensureModelDownloaded(resolvedFrom, _langNameForCode(fromCode));
     await _ensureModelDownloaded(resolvedTo, _langNameForCode(toCode));
-
     return _translationService.translate(
       text: text,
       sourceCode: resolvedFrom,
@@ -197,52 +463,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
-  /// Dịch văn bản offline bằng ML Kit, tự tải model ngôn ngữ nếu máy chưa có.
   Future<String> _translate(String text) async {
     if (_sourceLang == null || _targetLang == null) return text;
     return _translateBetween(text, _sourceLang!.code, _targetLang!.code);
-  }
-
-  /// Dịch 1 lần đoạn text hiện có trong ô nhập (dùng khi gõ tay, không ở chế độ trực tiếp)
-  Future<void> _handleTranslateOnce() async {
-    final text = _inputController.text.trim();
-    if (text.isEmpty || _sourceLang == null || _targetLang == null) return;
-
-    setState(() => _isTranslating = true);
-    try {
-      final result = await _translate(text);
-      if (!mounted) return;
-      setState(() {
-        _translatedText = result;
-        _clearWordSelections();
-      });
-      _saveToHistory(text, result);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Dịch thất bại: $e')));
-    } finally {
-      if (mounted) setState(() => _isTranslating = false);
-    }
-  }
-
-  void _saveToHistory(
-    String sourceText,
-    String translatedText, {
-    String type = 'text',
-  }) {
-    if (_sourceLang == null || _targetLang == null) return;
-    // Lưu lịch sử (Online - best effort, không chặn UI nếu lỗi mạng)
-    _ignoreHistoryFailure(
-      _historyService.createHistory(
-        sourceLanguage: _sourceLang!.code,
-        targetLanguage: _targetLang!.code,
-        sourceText: sourceText,
-        translatedText: translatedText,
-        type: type,
-      ),
-    );
   }
 
   Future<void> _ignoreHistoryFailure(
@@ -250,166 +473,39 @@ class _TranslateScreenState extends State<TranslateScreen> {
   ) async {
     try {
       await request;
-    } catch (_) {
-      // Lịch sử là best effort và không được chặn luồng dịch chính.
-    }
+    } catch (_) {}
   }
 
   Future<void> _speak(String text, String? langCode) async {
     if (text.isEmpty) return;
-    if (langCode != null) await _tts.setLanguage(langCode);
+    // Chỉ đổi ngôn ngữ đọc khi thật sự khác (mỗi lần gọi là 1 vòng qua native).
+    if (langCode != null && langCode != _ttsLanguage) {
+      await _tts.setLanguage(langCode);
+      _ttsLanguage = langCode;
+    }
     await _tts.speak(text);
   }
 
-  void _toggleWordSelection(int index, {required bool isSourceText}) {
-    setState(() {
-      final set =
-          isSourceText ? _selectedSourceWordIdx : _selectedTargetWordIdx;
-      if (set.contains(index)) {
-        set.remove(index);
-      } else {
-        set.add(index);
-      }
-    });
-  }
-
-  void _clearWordSelections() {
-    _selectedSourceWordIdx.clear();
-    _selectedTargetWordIdx.clear();
-  }
-
-  /// Ghép các từ đang được chọn (theo đúng thứ tự xuất hiện trong câu) thành
-  /// 1 cụm từ, vd chọn "đàn" rồi "bà" -> "đàn bà".
-  String _buildSelectedPhrase(List<String> words, Set<int> selectedIdx) {
-    final sortedIdx = selectedIdx.toList()..sort();
-    return sortedIdx.map((i) => words[i]).join(' ');
-  }
-
-  Future<void> _saveSelectedPhrase(
-    List<String> words, {
-    required bool isFromSourceText,
-  }) async {
-    final selectedIdx =
-        isFromSourceText ? _selectedSourceWordIdx : _selectedTargetWordIdx;
-    final phrase = _buildSelectedPhrase(words, selectedIdx);
-    if (phrase.trim().isEmpty) return;
-    await _saveWordAsVocabulary(phrase, isFromSourceText: isFromSourceText);
+  Future<void> _copyResult() async {
+    if (_translatedText.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: _translatedText));
     if (!mounted) return;
-    setState(() => selectedIdx.clear());
-  }
-
-  /// gốc (ngôn ngữ nói) HOẶC trong câu đã dịch (ngôn ngữ dịch).
-  /// [isFromSourceText] = true nếu từ được chạm nằm trong câu gốc (ngôn ngữ nói);
-  /// = false nếu nằm trong câu đã dịch (ngôn ngữ dịch).
-  /// Nghĩa của từ được TỰ ĐỘNG dịch sẵn (ML Kit, offline, theo chiều ngược lại
-  /// so với ngôn ngữ của từ) để điền vào ô nhập, người dùng vẫn có thể sửa lại
-  /// trước khi lưu.
-  Future<void> _saveWordAsVocabulary(
-    String word, {
-    required bool isFromSourceText,
-  }) async {
-    if (word.trim().isEmpty || _sourceLang == null || _targetLang == null) {
-      return;
-    }
-
-    final wordLang = isFromSourceText ? _sourceLang! : _targetLang!;
-    final meaningLang = isFromSourceText ? _targetLang! : _sourceLang!;
-
-    final formKey = GlobalKey<FormState>();
-    final meaningController = TextEditingController();
-    bool suggestionStarted = false;
-    bool suggesting = true;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          // Chỉ gọi dịch gợi ý nghĩa đúng 1 lần khi dialog vừa mở
-          if (!suggestionStarted) {
-            suggestionStarted = true;
-            _translateBetween(word, wordLang.code, meaningLang.code)
-                .then((suggested) {
-              meaningController.text = suggested;
-              if (context.mounted) setDialogState(() => suggesting = false);
-            }).catchError((_) {
-              if (context.mounted) setDialogState(() => suggesting = false);
-            });
-          }
-
-          return AlertDialog(
-            title: Text('Lưu từ "$word"'),
-            content: Form(
-              key: formKey,
-              child: TextFormField(
-                controller: meaningController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'Nghĩa của từ *',
-                  helperText: suggesting
-                      ? 'Đang gợi ý nghĩa...'
-                      : 'Đã tự điền gợi ý, bạn có thể sửa lại',
-                  suffixIcon: suggesting
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: SizedBox(
-                            height: 14,
-                            width: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : null,
-                ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Vui lòng nhập nghĩa của từ'
-                    : null,
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Hủy'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (formKey.currentState!.validate()) {
-                    Navigator.pop(context, true);
-                  }
-                },
-                child: const Text('Lưu'),
-              ),
-            ],
-          );
-        },
-      ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Đã sao chép bản dịch')),
     );
-    if (confirmed != true) return;
-
-    try {
-      await _vocabularyService.saveVocabulary(
-        word: word,
-        meaning: meaningController.text.trim(),
-        sourceLanguage: wordLang.code,
-        targetLanguage: meaningLang.code,
-        source: 'conversation',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Đã thêm "$word" vào danh sách từ vựng yêu thích'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lưu từ vựng thất bại: $e')));
-    }
   }
 
-  // ===== Chế độ dịch trực tiếp (Start / Stop) =====
+  // ===== Dịch trực tiếp bằng giọng nói (giữ nguyên logic v1) =====
 
   Future<void> _toggleLiveTranslate() async {
     if (_sourceLang == null || _targetLang == null) return;
+    if (_isStartingLive) return;
+    if (_isDownloading && !_isLiveTranslating) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Đang tải model — chờ tải xong hoặc bấm Hủy rồi hãy dịch.'),
+      ));
+      return;
+    }
     if (_isLiveTranslating) {
       await _stopLiveTranslate();
     } else {
@@ -419,36 +515,30 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _startLiveTranslate() async {
     if (_sourceLang == null) return;
+    final mySessionId = ++_liveSessionId;
+    bool isStale() => mySessionId != _liveSessionId;
 
     setState(() {
+      _isStartingLive = true;
       _isLiveTranslating = true;
       _inputController.clear();
       _translatedText = '';
       _sessionSegments.clear();
       _sessionStartedAt = DateTime.now();
-      _clearWordSelections();
     });
 
     try {
-      // 1. Lấy model Vosk Admin đã cấu hình cho ngôn ngữ nguồn (kể cả file upload thật hoặc link ngoài).
-      // ModelService tự cache lại config này; nếu backend không gọi được (tắt backend/mất
-      // mạng) nhưng máy đã từng lấy thành công trước đó, sẽ tự dùng lại config đã cache.
-      final ModelConfig? voskModel;
-      try {
-        voskModel = await _modelService.getActiveVoskModel(_sourceLang!.code);
-      } catch (_) {
-        throw Exception(
-          'Không kết nối được backend và chưa có cấu hình model nào được lưu sẵn trên máy. '
-          'Cần mở backend ít nhất 1 lần để tải cấu hình trước khi dùng offline.',
-        );
-      }
+      // Installed model -> backend/cache -> built-in default. If the model is
+      // already on the device, the backend is not contacted at all.
+      final ModelConfig? voskModel =
+          await _modelService.getActiveVoskModel(_sourceLang!.code);
+      if (isStale()) return;
       if (voskModel == null) {
         throw Exception(
-          'Chưa có model Vosk nào được cấu hình cho "${_sourceLang!.name}" (thêm ở Web Admin → Ngôn ngữ & Model)',
+          'Chưa có model giọng nói cho "${_sourceLang!.name}". '
+          'Admin cần thêm model ở Web Admin, hoặc ngôn ngữ này chưa được hỗ trợ.',
         );
       }
-      // Gán ra biến non-null riêng: Dart không giữ suy luận non-null của
-      // `voskModel` bên trong closure (setState/callback) phía dưới.
       final ModelConfig resolvedVoskModel = voskModel;
       final modelUrl = _modelService.getDownloadUrl(resolvedVoskModel);
       if (modelUrl == null || modelUrl.isEmpty) {
@@ -456,39 +546,77 @@ class _TranslateScreenState extends State<TranslateScreen> {
           'Model Vosk "${resolvedVoskModel.name}" chưa có file hoặc link tải hợp lệ',
         );
       }
+      final alreadyOnDevice = await _voskService.isModelDownloaded(modelUrl);
+      if (isStale()) return;
 
-      // 2. Tải (nếu cần) + nạp model - có thể mất vài giây/phút lần đầu tùy dung lượng
-      if (mounted) setState(() => _downloadingModelLabel = resolvedVoskModel.name);
-      await _voskService.loadModel(modelUrl);
-      if (mounted) setState(() => _downloadingModelLabel = null);
+      // Nếu model đang được nạp sẵn nền thì đợi nó xong (loadModel bên dưới sẽ
+      // thấy đã nạp và trả về ngay) thay vì nạp lại lần nữa.
+      await _voskPreload;
+      if (isStale()) return;
+      _warmUpTranslator(); // song song với lúc mở mic
 
-      // 3. Bắt đầu nghe mic thật, tự động dịch mỗi khi nhận diện xong 1 câu
+      final cancel = CancelToken();
+      if (mounted && !alreadyOnDevice) {
+        setState(() {
+          _downloadingModelLabel = resolvedVoskModel.name;
+          _downloadProgress = 0;
+          _downloadCancel = cancel;
+        });
+      }
+      try {
+        await _voskService.loadModel(
+          modelUrl,
+          cancel: cancel,
+          onProgress: (p) {
+            if (mounted && _downloadingModelLabel != null) {
+              setState(() => _downloadProgress = p);
+            }
+          },
+        );
+        OfflinePacks.notifyChanged();
+      } finally {
+        if (mounted) _clearDownloadState();
+      }
+      // From now on this language runs fully offline, no backend lookups.
+      await _modelService.markVoskInstalled(_sourceLang!.code, resolvedVoskModel);
+      if (isStale()) return;
+
       await _voskService.startListening(
         onPartial: (partialText) {
-          if (mounted) setState(() => _inputController.text = partialText);
+          // Chỉ đổi chữ trong ô nhập (TextField tự vẽ lại) — không setState để
+          // khỏi dựng lại cả màn hình ~10 lần/giây khi đang nói.
+          if (mounted && !isStale()) _inputController.text = partialText;
         },
-        onResult: (finalText) => _onSpeechRecognized(finalText),
+        onResult: (finalText) => _queueSpeechRecognized(finalText, isStale),
       );
+      if (isStale()) {
+        await _voskService.stopListening();
+        return;
+      }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLiveTranslating = false;
-          _downloadingModelLabel = null;
-        });
+      if (mounted && !isStale()) {
+        setState(() => _isLiveTranslating = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Không thể bắt đầu dịch trực tiếp: $e')),
+          SnackBar(content: Text(_errorText(e, 'Không thể bắt đầu dịch trực tiếp'))),
         );
       }
+    } finally {
+      if (mounted && !isStale()) setState(() => _isStartingLive = false);
     }
   }
 
   Future<void> _stopLiveTranslate() async {
+    _liveSessionId++;
+    _downloadCancel?.cancel();
     await _voskService.stopListening();
     if (!mounted) return;
-    setState(() => _isLiveTranslating = false);
+    setState(() {
+      _isLiveTranslating = false;
+      _isStartingLive = false;
+      _downloadingModelLabel = null;
+      _downloadProgress = null;
+    });
 
-    // Kết thúc phiên (Dừng) -> lưu TOÀN BỘ các lượt nói trong phiên này thành
-    // 1 mục lịch sử "conversation" duy nhất (không lưu riêng lẻ từng câu nữa).
     if (_sessionSegments.isNotEmpty &&
         _sourceLang != null &&
         _targetLang != null) {
@@ -509,78 +637,231 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
-  /// Được gọi mỗi khi nhận diện được 1 câu hoàn chỉnh trong lúc dịch trực tiếp.
-  /// Tự động dịch ngay và cập nhật kết quả; câu này được gom vào phiên hiện tại,
-  /// chỉ lưu thành lịch sử khi người dùng bấm Dừng (gộp cả phiên thành 1 mục).
-  Future<void> _onSpeechRecognized(String recognizedText) async {
-    if (recognizedText.trim().isEmpty) return;
-    setState(() {
-      _inputController.text = recognizedText;
-      _clearWordSelections();
-    });
+  void _queueSpeechRecognized(String recognizedText, bool Function() isStale) {
+    _recognitionQueue = _recognitionQueue.then(
+      (_) => _onSpeechRecognized(recognizedText, isStale),
+    );
+  }
+
+  Future<void> _onSpeechRecognized(
+    String recognizedText,
+    bool Function() isStale,
+  ) async {
+    if (recognizedText.trim().isEmpty || isStale() || !mounted) return;
+    setState(() => _inputController.text = recognizedText);
 
     try {
       final result = await _translate(recognizedText);
-      if (!mounted) return;
+      if (!mounted || isStale()) return;
       setState(() => _translatedText = result);
       _sessionSegments.add(
         HistorySegment(sourceText: recognizedText, translatedText: result),
       );
-
-      // Tự động đọc to bản dịch để có trải nghiệm "dịch trực tiếp" 2 chiều
-      _speak(result, _targetLang?.code);
+      if (!_autoSpeak) return; // không đọc -> không cần tạm dừng mic
+      await _voskService.pauseListening();
+      try {
+        await _speak(result, _targetLang?.code);
+      } finally {
+        if (!isStale()) await _voskService.resumeListening();
+      }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || isStale()) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Dịch thất bại: $e')));
+      ).showSnackBar(SnackBar(content: Text(_errorText(e, 'Dịch thất bại'))));
     }
   }
+
+  // ===== UI (v2) =====
 
   @override
   Widget build(BuildContext context) {
     if (_loadingLanguages) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Dịch'),
-        actions: [
-          if (_isLiveTranslating)
-            Padding(
-              padding: const EdgeInsets.only(right: AppTheme.spaceMd),
-              child: Row(
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(
+                  AppTheme.spaceMd,
+                  4,
+                  AppTheme.spaceMd,
+                  AppTheme.spaceMd,
+                ),
                 children: [
-                  _buildLiveDot(),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'Đang nghe',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
+                  const ConnectionBanner(),
+                  _buildLanguageBar(),
+                  const SizedBox(height: 12),
+                  if (_downloadingModelLabel != null) _buildDownloadingBanner(),
+                  _buildInputCard(),
+                  const SizedBox(height: 12),
+                  if (_translatedText.isNotEmpty) ...[
+                    _buildResultCard(),
+                  ],
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding:
+          const EdgeInsets.fromLTRB(AppTheme.spaceMd, 8, AppTheme.spaceMd, 10),
+      child: Row(
+        children: [
+          const BrandMark(compact: true),
+          if (_isMicOn) ...[
+            const SizedBox(width: 12),
+            _buildLiveDot(),
+            const SizedBox(width: 5),
+            const Text(
+              'Đang nghe',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+            ),
+          ],
+          const Spacer(),
+          if (VoskService.isSupported) ...[
+            Semantics(
+              button: true,
+              label: _autoSpeak
+                  ? 'Tắt đọc to bản dịch khi ghi âm'
+                  : 'Bật đọc to bản dịch khi ghi âm',
+              child: IconButton(
+                tooltip: _autoSpeak
+                    ? 'Đang bật đọc to bản dịch — bấm để tắt'
+                    : 'Đang tắt đọc to bản dịch — bấm để bật',
+                onPressed: _toggleAutoSpeak,
+                icon: Icon(
+                  _autoSpeak ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                  color: _autoSpeak ? AppTheme.moss : AppTheme.moss.withValues(alpha: .45),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+          Semantics(
+            button: true,
+            label: 'Mở trang cá nhân',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(13),
+              onTap: () => HomeTabs.of(context)?.select(4),
+              child: Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppTheme.coralTint,
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(color: AppTheme.coral),
+                ),
+                child: const Text(
+                  'N',
+                  style: TextStyle(
+                    color: AppTheme.coral,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppTheme.spaceMd,
-            4,
-            AppTheme.spaceMd,
-            AppTheme.spaceMd,
+    );
+  }
+
+  Widget _buildLanguageBar() {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: AppTheme.sand,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _buildLangButton(isSource: true)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Semantics(
+              button: true,
+              label: 'Đổi chiều dịch',
+              child: Material(
+                color: AppTheme.ivory,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _swapLanguages,
+                  child: const SizedBox(
+                    width: 38,
+                    height: 38,
+                    child: Icon(
+                      Icons.swap_horiz_rounded,
+                      size: 20,
+                      color: AppTheme.moss,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-          child: Column(
+          Expanded(child: _buildLangButton(isSource: false)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLangButton({required bool isSource}) {
+    final lang = isSource ? _sourceLang : _targetLang;
+    return Semantics(
+      button: true,
+      label: isSource ? 'Chọn ngôn ngữ nguồn' : 'Chọn ngôn ngữ đích',
+      child: _buildLangButtonBody(lang, isSource),
+    );
+  }
+
+  Widget _buildLangButtonBody(LanguageModel? lang, bool isSource) {
+    return Material(
+      color: AppTheme.ivory,
+      borderRadius: BorderRadius.circular(13),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(13),
+        onTap:
+            _isLiveTranslating ? null : () => _pickLanguage(isSource: isSource),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: AppTheme.line),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              _buildLanguageSelector(),
-              const SizedBox(height: AppTheme.spaceMd),
-              if (_downloadingModelLabel != null) _buildDownloadingBanner(),
-              _buildInputCard(),
-              const SizedBox(height: AppTheme.spaceMd),
-              _buildLiveTranslateButton(),
-              const SizedBox(height: AppTheme.spaceMd),
-              if (_translatedText.isNotEmpty) _buildResultCard(),
+              Flexible(
+                child: Text(
+                  lang?.name ?? '—',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.moss,
+                  ),
+                ),
+              ),
+              const Icon(
+                Icons.arrow_drop_down_rounded,
+                size: 20,
+                color: AppTheme.moss,
+              ),
             ],
           ),
         ),
@@ -588,11 +869,47 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
+  Future<void> _pickLanguage({required bool isSource}) async {
+    final picked = await showModalBottomSheet<LanguageModel>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => ListView(
+        children: _languages
+            .map(
+              (l) => ListTile(
+                title: Text(
+                  l.name,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                trailing: (isSource ? _sourceLang : _targetLang)?.code == l.code
+                    ? const Icon(Icons.check_rounded, color: AppTheme.coral)
+                    : null,
+                onTap: () => Navigator.pop(context, l),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (isSource) {
+        _sourceLang = picked;
+      } else {
+        _targetLang = picked;
+      }
+    });
+    if (_inputController.text.trim().isNotEmpty) _handleTranslateOnce();
+    _warmUpTranslator();
+    if (isSource) _preloadVosk();
+  }
+
   Widget _buildDownloadingBanner() {
+    final p = _downloadProgress;
+    final percent = p == null ? '' : ' · ${(p * 100).clamp(0, 100).round()}%';
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: AppTheme.spaceMd),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
       decoration: BoxDecoration(
         color: AppTheme.coralTint,
         borderRadius: BorderRadius.circular(14),
@@ -600,329 +917,247 @@ class _TranslateScreenState extends State<TranslateScreen> {
       ),
       child: Row(
         children: [
-          const SizedBox(
-            height: 16,
-            width: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              'Đang chuẩn bị model "$_downloadingModelLabel" · chỉ tải một lần',
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: AppTheme.moss,
-                fontWeight: FontWeight.w700,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Đang tải model "$_downloadingModelLabel"$percent',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: AppTheme.moss,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Việc dịch tạm dừng cho đến khi tải xong.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: AppTheme.moss.withValues(alpha: .6),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // p == null: chưa biết dung lượng -> thanh chạy liên tục.
+                LinearProgressIndicator(value: p, minHeight: 4),
+              ],
             ),
+          ),
+          TextButton(
+            onPressed: _downloadCancel == null || _downloadCancel!.isCancelled
+                ? null
+                : () {
+                    _translatePending = false; // huỷ -> đừng tự dịch lại
+                    _downloadCancel!.cancel();
+                  },
+            child: const Text('Hủy'),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildLanguageSelector() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-      decoration: BoxDecoration(
-        color: AppTheme.sand,
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: AppTheme.line),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _languageDropdown(
-              _sourceLang,
-              (v) => setState(() => _sourceLang = v),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: IconButton(
-              tooltip: 'Đổi chiều dịch',
-              style: IconButton.styleFrom(backgroundColor: AppTheme.ivory),
-              icon: const Icon(Icons.swap_horiz_rounded, size: 20),
-              onPressed: _isLiveTranslating ? null : _swapLanguages,
-            ),
-          ),
-          Expanded(
-            child: _languageDropdown(
-              _targetLang,
-              (v) => setState(() => _targetLang = v),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _languageDropdown(
-    LanguageModel? value,
-    ValueChanged<LanguageModel?> onChanged,
-  ) {
-    return DropdownButtonFormField<LanguageModel>(
-      initialValue: value,
-      isExpanded: true,
-      icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
-      decoration: const InputDecoration(
-        labelText: 'Ngôn ngữ',
-        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        filled: true,
-        fillColor: AppTheme.ivory,
-      ),
-      items: _languages
-          .map(
-            (l) => DropdownMenuItem(
-              value: l,
-              child: Text(l.name, overflow: TextOverflow.ellipsis),
-            ),
-          )
-          .toList(),
-      onChanged: _isLiveTranslating ? null : onChanged,
     );
   }
 
   Widget _buildInputCard() {
-    return Card(
-      color: AppTheme.ivory,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.edit_note_rounded,
-                  size: 18,
-                  color: AppTheme.coral,
-                ),
-                const SizedBox(width: 7),
-                Text(
-                  _isLiveTranslating
-                      ? 'Đang nhận giọng nói'
-                      : 'Câu bạn muốn dịch',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    color: AppTheme.moss,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            TextField(
-              controller: _inputController,
-              maxLines: 4,
-              minLines: 3,
-              readOnly: _isLiveTranslating,
-              decoration: InputDecoration(
-                hintText: _isLiveTranslating
-                    ? 'Đang nghe...'
-                    : 'Viết hoặc nói điều gì đó…',
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(vertical: 6),
-                hintStyle: TextStyle(
-                  color: AppTheme.moss.withValues(alpha: .42),
-                  fontSize: 17,
-                  height: 1.35,
-                ),
-              ),
-              style: const TextStyle(
-                fontFamily: 'serif',
-                fontSize: 19,
-                height: 1.35,
-                color: AppTheme.moss,
-              ),
-            ),
-            if (!_isLiveTranslating)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: _isTranslating ? null : _handleTranslateOnce,
-                  icon: _isTranslating
-                      ? const SizedBox(
-                          height: 14,
-                          width: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.arrow_forward_rounded, size: 16),
-                  label: const Text('Dịch câu này'),
-                ),
-              ),
-          ],
-        ),
+    final hasInput = _inputController.text.trim().isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.ivory,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.line),
       ),
-    );
-  }
-
-  /// Nút chính: Bắt đầu / Dừng dịch trực tiếp bằng giọng nói.
-  Widget _buildLiveTranslateButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: FilledButton.icon(
-        onPressed: _toggleLiveTranslate,
-        style: FilledButton.styleFrom(
-          backgroundColor:
-              _isLiveTranslating ? AppTheme.cranberry : AppTheme.coral,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(17),
-          ),
-        ),
-        icon: Icon(
-          _isLiveTranslating
-              ? Icons.stop_circle_outlined
-              : Icons.mic_none_rounded,
-          size: 23,
-        ),
-        label: Text(
-          _isLiveTranslating
-              ? 'Dừng nghe & dịch'
-              : 'Bắt đầu dịch bằng giọng nói',
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
-        ),
-      ),
-    );
-  }
-
-  /// 1 nhóm từ (câu gốc hoặc câu dịch) cho phép CHỌN NHIỀU từ liên tiếp để
-  /// ghép thành 1 cụm từ trước khi lưu (vd: từ ghép "đàn bà" gồm 2 âm tiết).
-  Widget _buildWordGroup({
-    required String label,
-    required List<String> words,
-    required Set<int> selectedIdx,
-    required bool isFromSourceText,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppTheme.moss,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 4,
-          runSpacing: 4,
-          children: List.generate(words.length, (i) {
-            final selected = selectedIdx.contains(i);
-            return FilterChip(
-              label: Text(words[i]),
-              selected: selected,
-              onSelected: (_) =>
-                  _toggleWordSelection(i, isSourceText: isFromSourceText),
-            );
-          }),
-        ),
-        if (selectedIdx.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: FilledButton.tonalIcon(
-              onPressed: () => _saveSelectedPhrase(
-                words,
-                isFromSourceText: isFromSourceText,
-              ),
-              icon: const Icon(Icons.bookmark_add_outlined, size: 16),
-              label: Text(
-                'Lưu cụm từ đã chọn: "${_buildSelectedPhrase(words, selectedIdx)}"',
-              ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _inputController,
+            readOnly: _isLiveTranslating,
+            minLines: 2,
+            maxLines: 5,
+            style: const TextStyle(fontSize: 19, height: 1.45),
+            decoration: const InputDecoration(
+              hintText: 'Nhập văn bản…',
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              filled: false,
+              contentPadding: EdgeInsets.zero,
             ),
           ),
-      ],
-    );
-  }
-
-  Widget _buildResultCard() {
-    final sourceWords = _inputController.text
-        .trim()
-        .split(RegExp(r'\s+'))
-        .map((w) => w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''))
-        .where((w) => w.isNotEmpty)
-        .toList();
-    final translatedWords = _translatedText
-        .trim()
-        .split(RegExp(r'\s+'))
-        .map((w) => w.replaceAll(RegExp(r'[^\wÀ-ỹ]'), ''))
-        .where((w) => w.isNotEmpty)
-        .toList();
-    return Expanded(
-      child: Card(
-        color: AppTheme.sand,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          const Divider(height: 18),
+          Row(
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Bản dịch',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                          color: AppTheme.moss,
-                        ),
+              if (VoskService.isSupported)
+                _buildVoicePill()
+              else
+                Row(
+                  children: [
+                    Icon(
+                      Icons.mic_off_rounded,
+                      size: 14,
+                      color: AppTheme.moss.withValues(alpha: .45),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'Voice chỉ có trên Android (Vosk)',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.moss.withValues(alpha: .45),
                       ),
-                      if (_isLiveTranslating) ...[
-                        const SizedBox(width: 8),
-                        _buildLiveDot(),
-                      ],
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.volume_up_outlined),
-                    onPressed: () => _speak(_translatedText, _targetLang?.code),
-                    tooltip: 'Chuyển văn bản thành giọng nói',
-                  ),
-                ],
-              ),
-              const Divider(),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (sourceWords.isNotEmpty)
-                        _buildWordGroup(
-                          label: 'Câu gốc (${_sourceLang?.name ?? ''})',
-                          words: sourceWords,
-                          selectedIdx: _selectedSourceWordIdx,
-                          isFromSourceText: true,
-                        ),
-                      if (sourceWords.isNotEmpty) const SizedBox(height: 12),
-                      if (translatedWords.isNotEmpty)
-                        _buildWordGroup(
-                          label: 'Câu dịch (${_targetLang?.name ?? ''})',
-                          words: translatedWords,
-                          selectedIdx: _selectedTargetWordIdx,
-                          isFromSourceText: false,
-                        ),
-                    ],
+                    ),
+                  ],
+                ),
+              const Spacer(),
+              if (_isTranslating)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    height: 14,
+                    width: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
-              ),
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text(
-                  'Chạm vào từ để chọn và lưu cụm từ vào sổ tay của bạn.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.moss,
-                    height: 1.35,
+              if (hasInput && !_isLiveTranslating)
+                Semantics(
+                  button: true,
+                  label: 'Xóa ô nhập',
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _clearInput,
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(
+                        color: AppTheme.sand,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: AppTheme.moss,
+                      ),
+                    ),
                   ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVoicePill() {
+    final preparing = _isStartingLive;
+    final recording = _isMicOn;
+    final label = preparing
+        ? (_downloadingModelLabel != null ? 'Đang tải model…' : 'Đang chuẩn bị…')
+        : (_micPaused
+            ? 'Mic tạm tắt (đang tải)'
+            : (_isLiveTranslating ? 'Dừng nghe' : 'Nói để dịch'));
+    final fg = recording ? AppTheme.ivory : AppTheme.cranberry;
+    return Material(
+      // Đỏ chỉ khi mic THẬT SỰ đang mở; đang tải/chuẩn bị thì nền nhạt.
+      color: recording ? AppTheme.cranberry : AppTheme.coralTint,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: preparing ? null : _toggleLiveTranslate,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (preparing)
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+                )
+              else
+                Icon(
+                  recording
+                      ? Icons.stop_circle_outlined
+                      : (_micPaused ? Icons.mic_off_rounded : Icons.mic_none_rounded),
+                  size: 16,
+                  color: fg,
+                ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: fg,
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResultCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.moss,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                (_targetLang?.name ?? 'BẢN DỊCH').toUpperCase(),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                  color: AppTheme.ivory.withValues(alpha: .55),
+                ),
+              ),
+              const Spacer(),
+              _buildResultIcon(
+                Icons.volume_up_rounded,
+                'Phát âm',
+                () => _speak(_translatedText, _targetLang?.code),
+              ),
+              const SizedBox(width: 8),
+              _buildResultIcon(Icons.copy_rounded, 'Sao chép', _copyResult),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _translatedText,
+            style: const TextStyle(
+              color: AppTheme.ivory,
+              fontSize: 21,
+              fontWeight: FontWeight.w700,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultIcon(IconData icon, String tooltip, VoidCallback onTap) {
+    return Material(
+      color: AppTheme.ivory.withValues(alpha: .12),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Icon(icon,
+              size: 15, color: AppTheme.ivory, semanticLabel: tooltip),
         ),
       ),
     );
@@ -932,8 +1167,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
     return Container(
       width: 8,
       height: 8,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.error,
+      decoration: const BoxDecoration(
+        color: AppTheme.cranberry,
         shape: BoxShape.circle,
       ),
     );

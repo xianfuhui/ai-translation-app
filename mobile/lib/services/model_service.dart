@@ -1,34 +1,20 @@
-import 'dart:convert';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../core/api_client.dart';
+import '../core/builtin_models.dart';
 import '../core/constants.dart';
+import '../core/local_store.dart';
 import '../models/model_config.dart';
 
-/// Gọi API `/api/models` - kho model Vosk (STT) và ML Kit (dịch) do Admin quản lý.
+/// Model catalog (Vosk STT + ML Kit translation), offline-first.
 ///
-/// Mỗi lần lấy được config model "active" cho 1 ngôn ngữ thành công từ backend,
-/// kết quả được cache lại xuống máy (`flutter_secure_storage`). Lần sau nếu
-/// backend không gọi được (mất mạng, tắt backend...), tự động dùng lại config
-/// đã cache thay vì báo lỗi ngay - miễn là model tương ứng đã từng tải về máy.
+/// Resolution order for a model config:
+///  1. a model already INSTALLED on this device (Vosk) -> the backend is never
+///     contacted again for that language;
+///  2. the backend (result cached on success);
+///  3. the cached config from an earlier successful call;
+///  4. built-in defaults (Vosk only).
 class ModelService {
   final _api = ApiClient();
-  final _cache = const FlutterSecureStorage();
-
-  String _cacheKey(String type, String languageCode) => 'model_cache_${type}_$languageCode';
-
-  Future<void> _saveToCache(String type, String languageCode, ModelConfig model) async {
-    await _cache.write(key: _cacheKey(type, languageCode), value: jsonEncode(model.toJson()));
-  }
-
-  Future<ModelConfig?> _readFromCache(String type, String languageCode) async {
-    final raw = await _cache.read(key: _cacheKey(type, languageCode));
-    if (raw == null) return null;
-    try {
-      return ModelConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-    } catch (_) {
-      return null; // Cache hỏng/không đọc được -> coi như chưa có cache
-    }
-  }
+  final _store = LocalStore();
 
   Future<List<ModelConfig>> getModels({String? type, String? languageCode}) async {
     final query = <String, dynamic>{};
@@ -39,35 +25,82 @@ class ModelService {
     return data.map((e) => ModelConfig.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  /// Lấy 1 model "active" cho 1 ngôn ngữ + type, có cache/fallback offline.
-  /// - Gọi backend thành công -> lưu cache rồi trả về.
-  /// - Gọi backend lỗi (mất mạng, tắt backend...) -> dùng lại cache lần gần
-  ///   nhất nếu có; không có cache thì mới ném lỗi ra ngoài.
+  Future<ModelConfig?> _readCached(String type, String languageCode) async {
+    final raw = await _store.readJson(LocalKeys.modelConfig(type, languageCode));
+    if (raw is! Map) return null;
+    try {
+      return ModelConfig.fromJson(Map<String, dynamic>.from(raw));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Active model from backend (cached) or the cache. Returns null instead of
+  /// throwing when the backend is unreachable and nothing was cached.
   Future<ModelConfig?> _getActiveModelWithCache(String type, String languageCode) async {
     try {
       final models = await getModels(type: type, languageCode: languageCode);
       final model = models.isNotEmpty ? models.first : null;
-      if (model != null) await _saveToCache(type, languageCode, model);
+      if (model != null) {
+        await _store.writeJson(LocalKeys.modelConfig(type, languageCode), model.toJson());
+      }
       return model;
-    } catch (e) {
-      final cached = await _readFromCache(type, languageCode);
-      if (cached != null) return cached;
-      rethrow; // Chưa từng lấy được config này lần nào -> bắt buộc phải có backend
+    } catch (_) {
+      return _readCached(type, languageCode);
     }
   }
 
-  /// Lấy model ML Kit active đầu tiên cho 1 ngôn ngữ (nếu admin đã cấu hình)
+  /// First active ML Kit model config for a language (null = use the plain
+  /// language code, which is what ML Kit expects anyway).
   Future<ModelConfig?> getActiveMlkitModel(String languageCode) {
     return _getActiveModelWithCache('mlkit', languageCode);
   }
 
-  /// Lấy model Vosk active đầu tiên cho 1 ngôn ngữ (nếu admin đã cấu hình)
-  Future<ModelConfig?> getActiveVoskModel(String languageCode) {
-    return _getActiveModelWithCache('vosk', languageCode);
+  // ===== Vosk: installed registry =====
+
+  Future<Map<String, dynamic>> _installedMap() => _store.readMap(LocalKeys.installedVosk);
+
+  /// The Vosk model installed on this device for [languageCode], if any.
+  Future<ModelConfig?> getInstalledVosk(String languageCode) async {
+    final map = await _installedMap();
+    final entry = map[languageCode];
+    if (entry is! Map) return null;
+    final url = entry['url'];
+    if (url is! String || url.isEmpty) return null;
+    return ModelConfig(
+      id: 'installed_vosk_$languageCode',
+      type: 'vosk',
+      name: (entry['name'] as String?) ?? languageCode,
+      languageCode: languageCode,
+      identifier: languageCode,
+      downloadUrl: url,
+    );
   }
 
-  /// Ghép domain backend (bỏ hậu tố /api) với `fileUrl` tương đối để có link tải đầy đủ.
-  /// Trả về link ngoài (`downloadUrl`) nếu model không có file upload trực tiếp.
+  /// Remember that the Vosk model behind [model] is on the device, so later
+  /// sessions skip the backend completely.
+  Future<void> markVoskInstalled(String languageCode, ModelConfig model) async {
+    final url = getDownloadUrl(model);
+    if (url == null || url.isEmpty) return;
+    await _store.mutateMap(LocalKeys.installedVosk, (map) {
+      map[languageCode] = {'name': model.name, 'url': url};
+    });
+  }
+
+  Future<void> unmarkVoskInstalled(String languageCode) {
+    return _store.mutateMap(LocalKeys.installedVosk, (map) => map.remove(languageCode));
+  }
+
+  /// Vosk model to use for [languageCode] (see class docs for the order).
+  Future<ModelConfig?> getActiveVoskModel(String languageCode) async {
+    final installed = await getInstalledVosk(languageCode);
+    if (installed != null) return installed;
+    final remote = await _getActiveModelWithCache('vosk', languageCode);
+    return remote ?? BuiltinModels.vosk(languageCode);
+  }
+
+  /// Full download link: backend origin + `fileUrl` for files an admin
+  /// uploaded, otherwise the external `downloadUrl`.
   String? getDownloadUrl(ModelConfig model) {
     if (model.hasUploadedFile) {
       final origin = AppConstants.baseUrl.replaceFirst(RegExp(r'/api/?$'), '');

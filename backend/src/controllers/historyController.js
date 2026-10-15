@@ -65,6 +65,30 @@ const deleteMyHistory = async (req, res, next) => {
   }
 };
 
+// @desc    Xóa 1 lượt nói khỏi phiên hội thoại (định danh bằng mốc thời gian `at`, tính
+//          bằng mili-giây). Xóa lượt cuối cùng thì xóa luôn cả phiên.
+// @route   DELETE /api/history/:id/segments?at=<ms>
+const deleteMySegment = async (req, res, next) => {
+  try {
+    const at = Number(req.query.at);
+    if (!Number.isFinite(at)) return res.status(400).json({ message: 'Thiếu mốc thời gian của lượt nói' });
+    const record = await TranslationHistory.findOne({ _id: req.params.id, user: req.user._id });
+    if (!record) return res.status(404).json({ message: 'Không tìm thấy bản ghi lịch sử' });
+    if (record.type !== 'conversation' || !record.segments) {
+      return res.status(400).json({ message: 'Mục này không phải hội thoại' });
+    }
+    record.segments = record.segments.filter((seg) => new Date(seg.at).getTime() !== at);
+    if (record.segments.length === 0) {
+      await record.deleteOne();
+      return res.json({ message: 'Đã xóa lượt cuối nên xóa luôn hội thoại', deleted: true });
+    }
+    await record.save();
+    res.json({ message: 'Đã xóa lượt nói', deleted: false });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Dùng LLM (Gemini) tóm tắt nội dung 1 mục lịch sử (đặc biệt hữu ích với
 //          mục type 'conversation' gồm nhiều lượt nói trong 1 phiên Bắt đầu/Dừng).
 //          LƯU Ý: tính năng LLM có giới hạn số ký tự đầu vào -> nội dung quá dài
@@ -153,6 +177,7 @@ module.exports = {
   createHistory,
   getMyHistory,
   deleteMyHistory,
+  deleteMySegment,
   summarizeHistory,
   getAllHistoryAdmin,
   deleteHistoryAdmin,

@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lingua — Clickable Prototype</title>
+<style>
+/* ============ canvas trang ============ */
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#e8e9ec; color:#1a1c1f; font-family:-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif; }
+.pagehead { padding:26px 34px 6px; }
+.pagehead h1 { font-size:22px; letter-spacing:-.02em; }
+.pagehead p { color:#5c6570; font-size:13.5px; margin-top:4px; max-width:760px; }
+.frames { display:flex; gap:56px; padding:22px 34px 60px; align-items:flex-start; flex-wrap:wrap; }
+.frame-col h2 { font-size:19px; letter-spacing:-.02em; }
+.frame-col .sub { color:#5c6570; font-size:12.5px; margin:2px 0 14px; }
+
+/* ============ khung máy ============ */
+.device { width:414px; border-radius:52px; background:#0d0f12; padding:12px;
+          box-shadow:0 24px 60px rgb(13 15 18 / .28); }
+.device .app { position:relative; width:390px; height:844px; border-radius:40px; overflow:hidden;
+               background:var(--bg); }
+.device.android { border-radius:34px; }
+.device.android .app { border-radius:24px; }
+
+/* ============ design tokens lingua ============ */
+.app { --bg:#f3efe6; --card:#fdfbf6; --sand:#e9e3d5; --green:#1d4d43; --green-soft:#2a5e52;
+       --coral:#f0705a; --coral-tint:#f9ddd4; --ink:#22302b; --muted:#7d867f; --line:#e3ddcf;
+       --cranberry:#b8453a;
+       font-family:-apple-system,"SF Pro Text",sans-serif; color:var(--ink);
+       display:flex; flex-direction:column; }
+.app[data-platform="android"] { font-family:Roboto,"Segoe UI",-apple-system,sans-serif; }
+
+/* platform gates */
+.app[data-platform="ios"] .only-android { display:none !important; }
+.app[data-platform="android"] .only-ios { display:none !important; }
+
+/* ============ status bar ============ */
+.statusbar { height:54px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
+             padding:14px 26px 0; font-weight:700; font-size:15px; }
+.statusbar .icons { display:flex; gap:5px; align-items:center; font-size:12px; letter-spacing:1px; }
+.notch { position:absolute; top:12px; left:50%; transform:translateX(-50%); width:120px; height:34px;
+         background:#0d0f12; border-radius:20px; z-index:60; }
+.punch { position:absolute; top:16px; left:50%; transform:translateX(-50%); width:14px; height:14px;
+         background:#0d0f12; border-radius:50%; z-index:60; }
+.homebar { position:absolute; bottom:7px; left:50%; transform:translateX(-50%); width:130px; height:5px;
+           background:#111; opacity:.85; border-radius:3px; z-index:60; }
+
+/* ============ screens ============ */
+.screen { position:absolute; inset:0; display:none; flex-direction:column; background:var(--bg); }
+.screen.on { display:flex; }
+.scroll { flex:1; overflow-y:auto; padding:0 20px 18px; scrollbar-width:none; }
+.scroll::-webkit-scrollbar { display:none; }
+.screen .statusbar { position:relative; }
+
+/* header màn con */
+.nav { display:flex; align-items:center; gap:14px; padding:8px 20px 12px; }
+.nav .back { font-size:26px; font-weight:700; color:var(--green); width:30px; cursor:pointer;
+             background:none; border:0; line-height:1; }
+.nav h1 { font-size:26px; font-weight:800; color:var(--green); letter-spacing:-.02em; }
+.nav .spacer { flex:1; }
+.nav .nav-ic { color:var(--green); font-size:19px; background:none; border:0; }
+
+/* components */
+.btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; height:56px;
+       border:0; border-radius:18px; background:var(--coral); color:#fff; font-size:16.5px;
+       font-weight:800; cursor:pointer; font-family:inherit; }
+.btn.small { width:auto; height:38px; padding:0 16px; font-size:13px; border-radius:12px; }
+.btn.ghost { background:transparent; color:var(--coral); border:1.5px solid var(--coral); }
+.field { display:flex; align-items:center; gap:12px; background:var(--card); border:1.5px solid var(--line);
+         border-radius:20px; padding:0 18px; height:60px; margin-bottom:14px; }
+.field .fic { color:var(--green); font-size:17px; width:22px; text-align:center; }
+.field .ph { color:var(--ink); font-weight:700; font-size:16px; flex:1; }
+.field .ph.dim { color:#9aa39c; }
+.card { background:var(--card); border-radius:20px; padding:16px; margin-bottom:14px;
+        box-shadow:0 1px 2px rgb(30 40 30 / .05); }
+.pill { display:inline-block; border-radius:999px; padding:3px 11px; font-size:11.5px; font-weight:800; }
+.pill.ok { background:#dcefe2; color:#1c7a45; }
+.pill.warn { background:#fcecd9; color:#a96a12; }
+.pill.coral { background:var(--coral-tint); color:var(--cranberry); }
+.pill.neutral { background:#ece7db; color:var(--muted); }
+.chip { display:inline-block; background:var(--card); border:1.5px solid var(--line); border-radius:14px;
+        padding:8px 16px; font-weight:700; font-size:14.5px; margin:0 8px 8px 0; cursor:pointer; }
+.chip.sel { border-color:var(--green); background:#eef2ea; }
+.chip.ja { font-size:15px; }
+.eyebrow { font-size:12px; font-weight:800; letter-spacing:.12em; color:var(--coral); margin:6px 0 6px; }
+.h-big { font-size:32px; font-weight:800; color:var(--green); line-height:1.15; letter-spacing:-.02em; }
+.sub { color:var(--muted); font-size:15px; margin-top:8px; line-height:1.45; }
+.logo-tile { width:52px; height:52px; border-radius:16px; background:var(--green); color:#fff;
+             display:flex; align-items:center; justify-content:center; font-weight:800; font-size:19px; }
+.avatar { width:46px; height:46px; border-radius:15px; background:var(--coral-tint); color:var(--coral);
+          display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px;
+          border:1.5px solid #f3c1b4; cursor:pointer; }
+
+/* tab bar */
+.tabbar { flex-shrink:0; display:flex; background:#fbf8f1; border-top:1px solid var(--line);
+          padding:8px 6px 26px; }
+.tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; border:0;
+       background:none; color:var(--muted); font-size:11.5px; font-weight:700; cursor:pointer;
+       font-family:inherit; }
+.tab svg { width:23px; height:23px; }
+.tab .ipill { padding:3px 14px; border-radius:999px; }
+.tab.on { color:var(--green); }
+.tab.on .ipill { background:var(--coral-tint); }
+.app[data-platform="android"] .tabbar { padding-bottom:14px; background:#f6f2e9; }
+.app[data-platform="android"] .tab .ipill { border-radius:12px; padding:3px 18px; }
+
+/* overlay dialog */
+.overlay { position:absolute; inset:0; background:rgb(30 30 25 / .45); display:none;
+           align-items:center; justify-content:center; z-index:40; }
+.overlay.on { display:flex; }
+.sheet { width:320px; background:var(--card); border-radius:26px; padding:24px; }
+.sheet h3 { color:var(--green); font-size:21px; font-weight:800; margin-bottom:16px; }
+.outfield { border:1.8px solid var(--green); border-radius:14px; padding:12px 14px; position:relative; }
+.outfield label { position:absolute; top:-9px; left:12px; background:var(--card); padding:0 6px;
+                  font-size:12px; color:var(--green); font-weight:700; }
+.outfield .val { font-size:17px; font-weight:600; }
+.helper { font-size:12px; color:var(--muted); margin:8px 0 18px; }
+.sheet-actions { display:flex; flex-direction:column; gap:6px; }
+.sheet-actions .huy { align-self:flex-end; background:none; border:0; color:var(--green);
+                      font-weight:800; font-size:15px; padding:8px 4px; cursor:pointer; }
+
+/* misc lingua */
+.hero { background:var(--green); border-radius:26px; padding:22px; color:#fff; position:relative;
+        overflow:hidden; margin-bottom:20px; }
+.hero::after { content:""; position:absolute; right:-30px; top:-30px; width:150px; height:150px;
+               background:var(--green-soft); border-radius:0 0 0 120px; }
+.hero h2 { font-size:26px; font-weight:800; line-height:1.2; letter-spacing:-.02em; position:relative; z-index:1; }
+.hero p { color:#cfe0d8; font-size:13.5px; margin:10px 0 16px; position:relative; z-index:1; }
+.qcard { border-radius:22px; padding:16px; min-height:150px; display:flex; flex-direction:column;
+         cursor:pointer; }
+.qcard h3 { font-size:17.5px; font-weight:800; color:var(--ink); margin-top:auto; }
+.qcard p { font-size:12.5px; color:var(--muted); margin-top:3px; }
+.qcard .arr { align-self:flex-end; color:var(--coral); font-weight:800; margin-top:6px; }
+.notice { display:flex; gap:10px; align-items:flex-start; background:var(--coral-tint);
+          border-radius:16px; padding:13px 14px; font-size:13px; font-weight:600; color:#7c4a3e;
+          margin-bottom:14px; line-height:1.45; }
+.bubble-user { display:flex; gap:10px; margin-bottom:16px; }
+.bubble-user .bav { width:34px; height:34px; border-radius:11px; background:var(--coral-tint);
+                    color:var(--coral); display:flex; align-items:center; justify-content:center; font-size:15px; }
+.bubble-user .txt { border-left:3px solid var(--coral); padding-left:10px; color:var(--coral);
+                    font-weight:700; font-size:15.5px; line-height:1.4; }
+.bubble-ai { background:var(--card); border-radius:18px; padding:14px 16px; font-size:14.5px;
+             line-height:1.55; margin-bottom:16px; box-shadow:0 1px 2px rgb(30 40 30 / .05); }
+.inputbar { display:flex; gap:10px; padding:10px 16px 14px; border-top:1px solid var(--line);
+            background:var(--bg); align-items:center; }
+.inputbar .box { flex:1; border:1.8px solid var(--green); border-radius:999px; height:50px;
+                 display:flex; align-items:center; padding:0 18px; color:#9aa39c; font-size:15px; gap:9px; }
+.inputbar .send { width:52px; height:52px; border-radius:50%; background:var(--coral); border:0;
+                  color:#fff; font-size:19px; cursor:pointer; }
+.wcard { display:flex; align-items:center; gap:12px; background:var(--card); border-radius:18px;
+         padding:14px 16px; margin-bottom:12px; }
+.wcard .w { flex:1; }
+.wcard .w b { font-size:16.5px; }
+.wcard .w .ipa { color:var(--muted); font-size:12.5px; margin-left:6px; }
+.wcard .w .mean { color:var(--green); font-size:13.5px; font-weight:700; margin-top:2px; }
+.wcard .act { color:var(--muted); font-size:16px; display:flex; gap:12px; }
+.hist { margin-bottom:12px; }
+.hist .meta { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+.hist .src { font-weight:700; font-size:14.5px; }
+.hist .dst { color:var(--green); font-weight:700; font-size:14.5px; margin-top:4px; }
+.prow { display:flex; align-items:center; gap:13px; padding:14px 4px; cursor:pointer; }
+.prow + .prow { border-top:1px solid var(--line); }
+.prow .pic { width:44px; height:44px; border-radius:14px; background:var(--sand); display:flex;
+             align-items:center; justify-content:center; font-size:17px; }
+.prow b { font-size:16px; }
+.prow p { font-size:12.5px; color:var(--muted); margin-top:1px; }
+.prow .go { margin-left:auto; color:var(--muted); }
+.flash { background:var(--card); border-radius:26px; min-height:300px; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; gap:10px; cursor:pointer; margin:20px 0;
+         box-shadow:0 8px 24px rgb(30 40 30 / .07); }
+.flash b { font-size:30px; color:var(--green); }
+.flash .ipa { color:var(--muted); }
+.flash .meaning { display:none; font-size:24px; color:var(--coral); font-weight:800; }
+.flash.flipped .meaning { display:block; }
+.flash.flipped .hint { display:none; }
+.flash .hint { color:var(--muted); font-size:13px; }
+.seg2 { display:flex; background:var(--sand); border-radius:999px; padding:4px; margin-bottom:16px; }
+.seg2 span { flex:1; text-align:center; padding:9px 0; border-radius:999px; font-weight:800;
+             font-size:13.5px; color:var(--muted); }
+.seg2 span.on { background:var(--card); color:var(--green); }
+.banner { background:var(--green); border-radius:24px; padding:22px 20px; display:flex; gap:16px;
+          align-items:center; color:#fff; margin-bottom:22px; }
+.banner .avatar { width:56px; height:56px; border-radius:18px; border:0; background:var(--coral); color:#fff; }
+.banner b { font-size:21px; }
+.banner p { color:#cfe0d8; font-size:13.5px; }
+.sect { font-size:19px; font-weight:800; color:var(--ink); margin:6px 0 12px; }
+a.linkish { color:var(--coral); font-weight:800; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<div class="pagehead">
+  <h1>lingua — Clickable Prototype</h1>
+  <p>Mọi thứ trong khung đều bấm được: đăng nhập, tab bar, dịch, lưu từ, flashcard (chạm để lật), đăng xuất.
+     Hai khung chạy độc lập. Khác biệt thật giữa 2 nền tảng được giữ nguyên: Android có dịch bằng giọng nói
+     (Vosk), iOS dùng ô nhập chữ.</p>
+</div>
+
+<main class="frames">
+  <section class="frame-col">
+    <h2>lingua — iOS</h2>
+    <p class="sub">iPhone · 390×844 · SwiftUI-style</p>
+    <div class="device ios"><div class="app" data-platform="ios"><div class="notch"></div><div class="homebar"></div></div></div>
+  </section>
+  <section class="frame-col">
+    <h2>lingua — Android</h2>
+    <p class="sub">Material · 390×844 · có Voice (Vosk)</p>
+    <div class="device android"><div class="app" data-platform="android"><div class="punch"></div></div></div>
+  </section>
+</main>
+
+<!-- ============ MÀN HÌNH (clone vào từng khung) ============ -->
+<template id="tpl">
+
+  <!-- LOGIN -->
+  <div class="screen on" data-screen="login">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="scroll">
+      <div style="display:flex;align-items:center;gap:14px;margin:26px 0 40px">
+        <div class="logo-tile">文A</div><span style="font-size:27px;font-weight:800;color:var(--green)">lingua</span>
+      </div>
+      <div class="h-big">Chào mừng<br>quay trở lại.</div>
+      <p class="sub" style="margin-bottom:30px">Tiếp tục hành trình học ngôn ngữ của bạn, từng câu một.</p>
+      <div class="field"><span class="fic">@</span><span class="ph dim">Email</span></div>
+      <div class="field"><span class="fic">🔒</span><span class="ph dim">Mật khẩu</span><span style="color:var(--green)">👁</span></div>
+      <button class="btn" data-go="home" style="margin-top:12px">Đăng nhập</button>
+      <p style="text-align:center;margin-top:22px;font-size:14.5px;color:var(--muted)">
+        Chưa có tài khoản? <a class="linkish" data-go="register">Đăng ký ngay</a></p>
+      <p style="text-align:center;margin-top:34px;font-size:12.5px;color:var(--muted);font-weight:700">
+        Dịch • Luyện tập • Ghi nhớ</p>
+    </div>
+  </div>
+
+  <!-- REGISTER -->
+  <div class="screen" data-screen="register">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="login">‹</button></div>
+    <div class="scroll">
+      <div class="logo-tile" style="margin:2px 0 24px">文A</div>
+      <div class="h-big">Tạo không gian<br>học của riêng bạn.</div>
+      <p class="sub" style="margin-bottom:28px">Lưu lại từ mới, luyện nói và theo dõi tiến bộ mỗi ngày.</p>
+      <div class="field"><span class="fic">👤</span><span class="ph dim">Họ và tên</span></div>
+      <div class="field"><span class="fic">@</span><span class="ph dim">Email</span></div>
+      <div class="field" style="margin-bottom:6px"><span class="fic">🔒</span><span class="ph dim">Mật khẩu</span><span style="color:var(--green)">👁</span></div>
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 22px 6px">Tối thiểu 6 ký tự</p>
+      <button class="btn" data-go="home">Bắt đầu học</button>
+    </div>
+  </div>
+
+  <!-- HOME -->
+  <div class="screen" data-screen="home">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="scroll">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 26px">
+        <div class="logo-tile">文A</div><div class="avatar" data-go="profile">N</div>
+      </div>
+      <div class="eyebrow">GÓC HỌC HÔM NAY</div>
+      <div class="h-big">Chào, Nguyễn.</div>
+      <p class="sub" style="margin-bottom:22px">Mình bắt đầu bằng một câu nhỏ nhé?</p>
+      <div class="hero">
+        <div style="color:var(--coral);font-weight:800;font-size:19px;margin-bottom:10px">文A</div>
+        <h2>Một câu mới,<br>một cách nhìn mới.</h2>
+        <p>Dịch chữ hoặc nói trực tiếp để bắt đầu khám phá.</p>
+        <button class="btn" data-go="translate" style="position:relative;z-index:1">→&nbsp; Bắt đầu dịch</button>
+      </div>
+      <div class="eyebrow" style="color:var(--muted)">ĐI NHANH</div>
+      <div style="display:flex;gap:14px;margin-bottom:16px">
+        <div class="qcard" style="flex:1;background:var(--coral-tint)" data-go="ai-empty">
+          <span style="font-size:20px">✦</span><h3>Luyện cùng AI</h3><p>Thử một đoạn hội thoại</p><span class="arr">↗</span>
+        </div>
+        <div class="qcard" style="flex:1;background:var(--sand)" data-go="vocab">
+          <span style="font-size:20px">🔖</span><h3>Sổ tay từ</h3><p>Ôn lại từ đáng nhớ</p><span class="arr">↗</span>
+        </div>
+      </div>
+      <div class="card" style="display:flex;gap:13px;border-radius:24px">
+        <div class="prow-pic" style="width:44px;height:44px;border-radius:14px;background:var(--sand);display:flex;align-items:center;justify-content:center">💡</div>
+        <div><b style="font-size:15.5px;color:var(--green)">Mẹo nhỏ cho hôm nay</b>
+          <p style="font-size:13.5px;color:var(--muted);margin-top:3px;line-height:1.5">Lưu lại một cụm từ thay vì chỉ một
+          từ đơn. Bạn sẽ nhớ nó trong ngữ cảnh tự nhiên hơn.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRANSLATE -->
+  <div class="screen" data-screen="translate">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Dịch</h1></div>
+    <div class="scroll">
+      <div style="display:flex;gap:10px;align-items:center;background:var(--sand);border-radius:20px;padding:10px;margin-bottom:14px">
+        <div style="flex:1;background:var(--card);border:1.5px solid var(--line);border-radius:16px;padding:9px 12px;min-width:0">
+          <div style="font-size:11px;color:var(--muted);font-weight:700">Ngôn ngữ</div>
+          <b style="font-size:16px;white-space:nowrap">Tiếng Anh ▾</b></div>
+        <div style="width:38px;height:38px;flex-shrink:0;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center">⇄</div>
+        <div style="flex:1;background:var(--card);border:1.5px solid var(--line);border-radius:16px;padding:9px 12px;min-width:0">
+          <div style="font-size:11px;color:var(--muted);font-weight:700">Ngôn ngữ</div>
+          <b style="font-size:16px;white-space:nowrap">Tiếng Nhật ▾</b></div>
+      </div>
+      <div class="card" style="border-radius:24px">
+        <b style="color:var(--green);font-size:15px">✏️ Câu bạn muốn dịch</b>
+        <div style="border:2px solid var(--green);border-radius:16px;padding:13px;margin:11px 0 10px;font-size:17px;min-height:86px">
+          Good morning, how are you today?</div>
+        <div style="text-align:right"><a class="linkish">→ Dịch câu này</a></div>
+      </div>
+      <div class="notice only-ios"><span>🎙̸</span>
+        <span>Dịch bằng giọng nói hiện chỉ có trên Android (engine Vosk). Trên iOS bạn dùng ô nhập chữ nhé.</span></div>
+      <button class="btn only-android" style="margin-bottom:14px">🎙&nbsp; Bắt đầu dịch bằng giọng nói</button>
+      <div class="card" style="background:var(--sand);border-radius:24px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <b style="font-size:16.5px;color:var(--green)">Bản dịch</b><span style="color:var(--green)">🔊</span></div>
+        <hr style="border:0;border-top:1px solid #d9d2c0;margin:10px 0 12px">
+        <div style="font-size:12.5px;font-weight:800;color:var(--muted);margin-bottom:9px">Câu gốc (Tiếng Anh)</div>
+        <div>
+          <span class="chip">Good</span><span class="chip" data-overlay="save">morning</span><span class="chip">how</span>
+          <span class="chip">are</span><span class="chip">you</span><span class="chip">today</span>
+        </div>
+        <div style="font-size:12.5px;font-weight:800;color:var(--muted);margin:10px 0 9px">Câu dịch (Tiếng Nhật)</div>
+        <span class="chip ja">おはようございます今日はどうですか</span>
+        <p style="font-size:12px;color:var(--muted);margin-top:10px">Chạm vào từ để chọn và lưu cụm từ vào sổ tay của bạn.</p>
+      </div>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+    <!-- overlay lưu từ -->
+    <div class="overlay" data-overlay-id="save">
+      <div class="sheet">
+        <h3>Lưu từ "morning"</h3>
+        <div class="outfield"><label>Nghĩa của từ *</label><div class="val">朝</div></div>
+        <div class="helper">Đã tự điền gợi ý, bạn có thể sửa lại</div>
+        <div class="sheet-actions">
+          <button class="huy" data-overlay-close>Hủy</button>
+          <button class="btn" data-overlay-close>Lưu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI EMPTY -->
+  <div class="screen" data-screen="ai-empty">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Luyện cùng AI</h1></div>
+    <div class="scroll" style="display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center">
+      <div style="width:96px;height:96px;border-radius:28px;background:var(--coral-tint);display:flex;align-items:center;justify-content:center;font-size:34px;color:var(--coral);margin-bottom:22px">✦</div>
+      <div class="h-big" style="font-size:27px">Một người bạn để<br>luyện ngôn ngữ.</div>
+      <p class="sub" style="margin-bottom:26px">Hỏi về ngữ pháp, thử một cuộc hội thoại, hoặc nhờ AI sửa câu cho bạn.</p>
+      <span class="chip" data-go="ai-chat" style="border-radius:999px">↗ &nbsp;Sửa câu này giúp mình</span>
+      <span class="chip" data-go="ai-chat" style="border-radius:999px">↗ &nbsp;Luyện hội thoại ngắn</span>
+    </div>
+    <div class="inputbar">
+      <div class="box">💬&nbsp; Viết tin nhắn cho AI…</div>
+      <button class="send" data-go="ai-chat">↑</button>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+  </div>
+
+  <!-- AI CHAT -->
+  <div class="screen" data-screen="ai-chat">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Luyện cùng AI</h1></div>
+    <div class="scroll" style="padding-top:8px">
+      <div class="bubble-user"><div class="bav">👤</div>
+        <div class="txt">Fix this sentence: I goes to school yesterday</div></div>
+      <div class="bubble-ai">
+        Câu đúng là: <b>"I went to school yesterday."</b><br><br>
+        Hai lỗi nhỏ: <b>goes → went</b> (quá khứ đơn vì có "yesterday"), và với chủ ngữ "I" thì
+        không chia động từ thêm <i>-es</i>. Thử đặt một câu khác với "went" xem sao? 💪
+      </div>
+    </div>
+    <div class="inputbar">
+      <div class="box">💬&nbsp; Viết tin nhắn cho AI…</div>
+      <button class="send">↑</button>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+  </div>
+
+  <!-- VOCAB -->
+  <div class="screen" data-screen="vocab">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Sổ tay từ</h1>
+      <span class="spacer"></span><button class="btn small" data-go="flashcard">Luyện Flashcard</button></div>
+    <div class="scroll">
+      <div class="seg2"><span class="on">Của tôi</span><span>Kho hệ thống</span></div>
+      <div class="wcard"><div class="w"><b>morning</b><span class="ipa">/ˈmɔːr.nɪŋ/</span>
+          <div class="mean">朝 <span class="pill coral" style="margin-left:6px">mới lưu</span></div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:3px">en → ja</div></div>
+        <div class="act"><span>🔖</span><span>🗑</span></div></div>
+      <div class="wcard"><div class="w"><b>hello</b><span class="ipa">/həˈloʊ/</span>
+          <div class="mean">xin chào</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:3px">en → vi</div></div>
+        <div class="act"><span>🔖</span><span>🗑</span></div></div>
+      <div class="wcard"><div class="w"><b>beautiful</b><span class="ipa">/ˈbjuː.tɪ.fəl/</span>
+          <div class="mean">xinh đẹp</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:3px">en → vi</div></div>
+        <div class="act"><span>🔖</span><span>🗑</span></div></div>
+      <div class="wcard"><div class="w"><b>journey</b><span class="ipa">/ˈdʒɜːr.ni/</span>
+          <div class="mean">hành trình</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:3px">en → vi</div></div>
+        <div class="act"><span style="opacity:.35">🔖</span><span>🗑</span></div></div>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+  </div>
+
+  <!-- FLASHCARD -->
+  <div class="screen" data-screen="flashcard">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="vocab">‹</button><h1>Luyện Flashcard</h1></div>
+    <div class="scroll">
+      <p style="text-align:center;color:var(--muted);font-weight:700;font-size:13.5px;margin-top:10px">Ôn tập hôm nay &nbsp;·&nbsp; 1 / 2</p>
+      <div class="flash" data-flip>
+        <b>hello</b><span class="ipa">/həˈloʊ/</span>
+        <span class="meaning">xin chào</span>
+        <span class="hint">Chạm vào thẻ để xem nghĩa</span>
+      </div>
+      <div style="display:flex;gap:12px">
+        <button class="btn ghost" style="flex:1;height:48px;font-size:14px">🔊 Phát âm</button>
+        <button class="btn ghost" style="flex:1;height:48px;font-size:14px">Bỏ khỏi Flashcard</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="screen" data-screen="history">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Lịch sử</h1>
+      <span class="spacer"></span><button class="nav-ic">⟳</button></div>
+    <div class="scroll">
+      <div class="card hist">
+        <div class="meta"><span class="pill ok">en → ja</span><span style="font-size:12px;color:var(--muted)">30/08 · 08:28</span></div>
+        <div class="src">Good morning, how are you today?</div>
+        <div class="dst">おはようございます、今日はどうですか？</div>
+      </div>
+      <div class="card hist">
+        <div class="meta"><span class="pill ok">en → vi</span><span class="pill neutral">3 lượt</span>
+          <span style="font-size:12px;color:var(--muted)">30/08 · 03:12</span></div>
+        <div class="src">Hello, how are you today?</div>
+        <div class="dst">Xin chào, hôm nay bạn thế nào?</div>
+        <button class="btn ghost small" style="margin-top:10px">✦ Tóm tắt bằng AI</button>
+      </div>
+      <div class="card hist">
+        <div class="meta"><span class="pill ok">en → vi</span><span style="font-size:12px;color:var(--muted)">29/08 · 08:11</span></div>
+        <div class="src">Where is the nearest airport?</div>
+        <div class="dst">Sân bay gần nhất ở đâu?</div>
+      </div>
+      <div class="card hist">
+        <div class="meta"><span class="pill ok">en → vi</span><span style="font-size:12px;color:var(--muted)">27/08 · 08:11</span></div>
+        <div class="src">I have a meeting tomorrow morning.</div>
+        <div class="dst">Tôi có một cuộc họp vào sáng mai.</div>
+      </div>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+  </div>
+
+  <!-- PROFILE -->
+  <div class="screen" data-screen="profile">
+    <div class="statusbar"><span class="t">9:41</span><span class="icons">▮▮▮ ⌁ ▉</span></div>
+    <div class="nav"><button class="back" data-go="home">‹</button><h1>Cá nhân</h1>
+      <span class="spacer"></span><button class="nav-ic">⚙︎</button></div>
+    <div class="scroll">
+      <div class="banner">
+        <div class="avatar">N</div>
+        <div><b>Nguyễn Văn A</b><p>user1@example.com</p></div>
+      </div>
+      <div class="sect">Tài khoản</div>
+      <div class="card" style="padding:6px 16px">
+        <div class="prow"><div class="pic">🔒</div>
+          <div><b>Đổi mật khẩu</b><p>Cập nhật thông tin bảo mật</p></div><span class="go">›</span></div>
+        <div class="prow" data-go="login"><div class="pic" style="background:var(--coral-tint)">⎋</div>
+          <div><b style="color:var(--cranberry)">Đăng xuất</b><p>Thoát khỏi tài khoản trên thiết bị này</p></div>
+          <span class="go">›</span></div>
+      </div>
+      <div class="sect">Về Lingua</div>
+      <div class="card" style="display:flex;gap:12px;align-items:center">
+        <span style="color:var(--coral);font-size:19px">✦</span>
+        <p style="font-size:14.5px;line-height:1.5">Một góc nhỏ để dịch, luyện tập và giữ lại những từ đáng nhớ.</p>
+      </div>
+    </div>
+    <div class="tabbar" data-tabbar></div>
+  </div>
+
+</template>
+
+<script>
+const TABS = [
+  { id: "translate", label: "Dịch",
+    ic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h9M8.5 3v2c0 4-2.5 7-5 8.5M5 9c1.5 2.5 4.5 4.5 8 5"/><path d="m13 21 4.5-10L22 21M14.8 17h5.4"/></svg>' },
+  { id: "ai-empty", label: "AI",
+    ic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.7 4.6L18 9.2l-4.3 1.6L12 15.4l-1.7-4.6L6 9.2l4.3-1.6zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>' },
+  { id: "vocab", label: "Từ vựng",
+    ic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg>' },
+  { id: "history", label: "Lịch sử",
+    ic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3 3"/></svg>' },
+  { id: "profile", label: "Cá nhân",
+    ic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5"/></svg>' },
+];
+// tab nào "sáng" cho màn nào
+const TAB_ACTIVE = { translate: "translate", "ai-empty": "ai-empty", "ai-chat": "ai-empty",
+                     vocab: "vocab", flashcard: "vocab", history: "history", profile: "profile" };
+
+document.querySelectorAll(".app").forEach((app) => {
+  app.appendChild(document.getElementById("tpl").content.cloneNode(true));
+
+  // dựng tab bar cho các màn có [data-tabbar]
+  app.querySelectorAll("[data-tabbar]").forEach((bar) => {
+    const screen = bar.closest(".screen").dataset.screen;
+    bar.innerHTML = TABS.map((t) => `
+      <button class="tab ${TAB_ACTIVE[screen] === t.id ? "on" : ""}" data-go="${t.id}">
+        <span class="ipill">${t.ic}</span>${t.label}
+      </button>`).join("");
+  });
+
+  const show = (id) => {
+    app.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.dataset.screen === id));
+    app.querySelectorAll(".overlay").forEach((o) => o.classList.remove("on"));
+  };
+
+  app.addEventListener("click", (e) => {
+    const flip = e.target.closest("[data-flip]");
+    if (flip) { flip.classList.toggle("flipped"); return; }
+    const close = e.target.closest("[data-overlay-close]");
+    if (close) { close.closest(".overlay").classList.remove("on"); return; }
+    const ov = e.target.closest("[data-overlay]");
+    if (ov) { app.querySelector(`[data-overlay-id="${ov.dataset.overlay}"]`).classList.add("on"); return; }
+    const go = e.target.closest("[data-go]");
+    if (go) show(go.dataset.go);
+  });
+});
+</script>
+</body>
+</html>

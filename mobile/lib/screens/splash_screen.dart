@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../providers/auth_provider.dart';
 import 'auth/login_screen.dart';
-import 'dashboard_screen.dart';
+import 'home_screen.dart';
 import '../widgets/brand_mark.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -26,8 +26,9 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => auth.status == AuthStatus.authenticated
-            ? const DashboardScreen()
+        builder: (_) => auth.status == AuthStatus.authenticated ||
+                auth.status == AuthStatus.guest
+            ? const HomeScreen()
             : const LoginScreen(),
       ),
     );

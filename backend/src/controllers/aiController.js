@@ -1,6 +1,12 @@
 const AIConversation = require('../models/AIConversation');
 const { callGemini, truncateForLlm, MAX_LLM_INPUT_CHARS } = require('../utils/gemini');
 
+// Chặn anti-pattern "unbounded array": messages[] nhúng trong document nên lớn
+// vô hạn sẽ đâm vào trần 16MB/document của MongoDB (và mỗi lần save phải ghi lại
+// cả mảng). Quá ngưỡng thì yêu cầu mở hội thoại mới; validator $jsonSchema ở
+// tầng DB còn 1 lớp chặn cứng nữa (maxItems 400 — xem scripts/sync-db.js).
+const MAX_MESSAGES_PER_CONVERSATION = 200;
+
 // @desc    Gửi tin nhắn hội thoại với AI (tạo mới hoặc tiếp tục conversationId)
 // @route   POST /api/ai/chat
 // body: { conversationId?, message }
@@ -13,6 +19,12 @@ const chat = async (req, res, next) => {
     if (conversationId) {
       conversation = await AIConversation.findOne({ _id: conversationId, user: req.user._id });
       if (!conversation) return res.status(404).json({ message: 'Không tìm thấy hội thoại' });
+      if (conversation.messages.length >= MAX_MESSAGES_PER_CONVERSATION) {
+        return res.status(409).json({
+          message: 'Hội thoại đã đạt giới hạn độ dài. Hãy bắt đầu một hội thoại mới nhé.',
+          code: 'CONVERSATION_FULL',
+        });
+      }
     } else {
       conversation = await AIConversation.create({ user: req.user._id, messages: [] });
     }
