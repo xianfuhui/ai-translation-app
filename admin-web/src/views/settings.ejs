@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="vi">
+<%- include('partials/head', { title: 'Cài đặt' }) %>
+<body>
+<div class="app-shell">
+  <%- include('partials/sidebar', { active: 'settings', admin: admin }) %>
+
+  <main class="main">
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Quản trị hệ thống</div>
+        <h1>Cài đặt</h1>
+      </div>
+    </div>
+
+    <!-- ===== Gemini API ===== -->
+    <div class="panel">
+      <h2>Gemini API</h2>
+
+      <% if (message && message.section === 'gemini') { %>
+        <div class="alert alert-<%= message.type %>"><%= message.text %></div>
+      <% } %>
+
+      <div class="kv">
+        <div class="kv-row">
+          <span class="kv-label">Trạng thái</span>
+          <span>
+            <% if (gemini.hasKey) { %>
+              <span class="badge badge-active">Đã cấu hình</span>
+              <span class="mono kv-value"><%= gemini.maskedKey %></span>
+              <span class="hint">
+                (<%= gemini.keySource === 'database' ? 'do admin nhập' : 'lấy từ file .env của backend' %>)
+              </span>
+            <% } else { %>
+              <span class="badge badge-inactive">Chưa có API key</span>
+              <span class="hint">Tính năng AI Assistant sẽ không hoạt động cho tới khi nhập key.</span>
+            <% } %>
+          </span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-label">Model đang dùng</span>
+          <span><span class="mono kv-value"><%= gemini.model %></span>
+            <span class="hint">(<%= gemini.modelSource === 'database' ? 'do admin nhập' : 'mặc định từ .env' %>)</span></span>
+        </div>
+      </div>
+
+      <form method="POST" action="/settings/gemini" autocomplete="off">
+        <div class="form-row">
+          <div class="form-group" style="flex: 2;">
+            <label for="apiKey">API key mới</label>
+            <input type="password" id="apiKey" name="apiKey" placeholder="Dán Gemini API key (để trống nếu chỉ đổi model)" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label for="model">Model</label>
+            <input type="text" id="model" name="model" value="<%= gemini.modelSource === 'database' ? gemini.model : '' %>" placeholder="vd: <%= gemini.model %>" />
+          </div>
+        </div>
+        <p class="hint" style="margin: 0 0 14px;">
+          Key được mã hóa khi lưu và không bao giờ hiển thị lại đầy đủ. Lấy key tại
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" class="link">Google AI Studio</a>.
+        </p>
+        <div class="actions-cell">
+          <button type="submit" class="btn btn-primary">Lưu cấu hình</button>
+          <button type="submit" formaction="/settings/gemini/test" class="btn btn-ghost">Thử kết nối</button>
+          <% if (gemini.keySource === 'database' || gemini.modelSource === 'database') { %>
+            <button type="submit" formaction="/settings/gemini/reset" class="btn btn-danger"
+              onclick="return confirm('Xóa key/model đã nhập và quay lại dùng giá trị trong .env?');">Xóa cấu hình đã nhập</button>
+          <% } %>
+        </div>
+      </form>
+    </div>
+
+    <!-- ===== Đổi mật khẩu ===== -->
+    <div class="panel">
+      <h2>Đổi mật khẩu</h2>
+
+      <% if (message && message.section === 'password') { %>
+        <div class="alert alert-<%= message.type %>"><%= message.text %></div>
+      <% } %>
+
+      <form method="POST" action="/settings/password" autocomplete="off">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="oldPassword">Mật khẩu hiện tại</label>
+            <input type="password" id="oldPassword" name="oldPassword" required autocomplete="current-password" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="newPassword">Mật khẩu mới (tối thiểu 6 ký tự)</label>
+            <input type="password" id="newPassword" name="newPassword" required minlength="6" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label for="confirmPassword">Nhập lại mật khẩu mới</label>
+            <input type="password" id="confirmPassword" name="confirmPassword" required minlength="6" autocomplete="new-password" />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Đổi mật khẩu</button>
+      </form>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { getGeminiConfig } = require('./appSettings');
 
 const GEMINI_API_URL = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -28,12 +29,23 @@ const truncateForLlm = (text, maxChars = MAX_LLM_INPUT_CHARS) => {
 };
 
 // Gọi Gemini API với danh sách nội dung (contents)
-const callGemini = async (contents) => {
-  const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+// API key + model lấy từ cấu hình admin nhập (DB), fallback về .env
+const callGemini = async (contents, overrides = {}) => {
+  const config = await getGeminiConfig();
+  const apiKey = overrides.apiKey || config.apiKey;
+  const model = overrides.model || config.model;
+
+  if (!apiKey) {
+    const err = new Error('Chưa cấu hình Gemini API key. Admin vui lòng nhập tại trang Cài đặt.');
+    err.code = 'NO_GEMINI_KEY';
+    throw err;
+  }
+
+  // Gửi key qua header thay vì query string để không lộ trong log URL
   const response = await axios.post(
-    `${GEMINI_API_URL(model)}?key=${process.env.GEMINI_API_KEY}`,
+    GEMINI_API_URL(model),
     { contents },
-    { headers: { 'Content-Type': 'application/json' } }
+    { headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey } }
   );
   return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 };

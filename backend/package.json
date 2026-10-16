@@ -9,6 +9,8 @@
     "seed:admin": "node seed/createAdmin.js",
     "seed:data": "node seed/seedData.js",
     "seed:rich": "node seed/seedRich.js",
+    "seed:reset": "node seed/resetDb.js",
+    "seed:all": "node seed/seedData.js && node seed/seedRich.js",
     "db:sync": "node scripts/sync-db.js"
   },
   "dependencies": {

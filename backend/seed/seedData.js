@@ -1,6 +1,7 @@
 // Script tạo dữ liệu mẫu để kiểm thử toàn bộ hệ thống.
 // Chạy: node seed/seedData.js
-// An toàn chạy nhiều lần - sẽ xóa dữ liệu mẫu cũ (đánh dấu qua email/từ khóa) trước khi tạo lại.
+// Mỗi lần chạy sẽ XÓA SẠCH toàn bộ dữ liệu cũ (kể cả tài khoản admin, file model đã upload;
+// giữ lại collection settings) rồi tạo lại admin + dữ liệu mẫu từ đầu.
 require('dotenv').config();
 const mongoose = require('mongoose');
 const User = require('../src/models/User');
@@ -10,12 +11,17 @@ const SystemVocabulary = require('../src/models/SystemVocabulary');
 const TranslationHistory = require('../src/models/TranslationHistory');
 const AIConversation = require('../src/models/AIConversation');
 const Model = require('../src/models/Model');
+const { resetDatabase, ensureAdmin } = require('./helpers');
 
 const DEMO_USER_EMAILS = ['user1@example.com', 'user2@example.com'];
 
 async function run() {
   await mongoose.connect(process.env.MONGO_URI);
   console.log('✅ Đã kết nối MongoDB');
+
+  // ===== 0. Xóa sạch dữ liệu cũ + tạo lại admin =====
+  await resetDatabase();
+  await ensureAdmin();
 
   // ===== 1. Ngôn ngữ hỗ trợ =====
   const languageData = [
@@ -158,7 +164,7 @@ async function run() {
   console.log('----- TÀI KHOẢN KIỂM THỬ -----');
   console.log(`User 1: ${DEMO_USER_EMAILS[0]} / User@123`);
   console.log(`User 2: ${DEMO_USER_EMAILS[1]} / User@123`);
-  console.log('Admin : chạy "npm run seed:admin" nếu chưa có (admin@example.com / Admin@123)');
+  console.log('Admin : admin@example.com / Admin@123 (đã tạo lại tự động)');
   console.log('-------------------------------\n');
 
   await mongoose.disconnect();

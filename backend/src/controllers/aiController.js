@@ -49,6 +49,7 @@ const chat = async (req, res, next) => {
 
     res.json({ conversationId: conversation._id, reply: aiReply });
   } catch (error) {
+    if (error.code === 'NO_GEMINI_KEY') return res.status(503).json({ message: error.message, code: error.code });
     if (error.response) {
       console.error('Gemini API error:', error.response.data);
       return res.status(502).json({ message: 'Lỗi khi gọi Gemini API', detail: error.response.data });
@@ -85,6 +86,7 @@ const summarize = async (req, res, next) => {
 
     res.json({ conversationId: conversation._id, summary });
   } catch (error) {
+    if (error.code === 'NO_GEMINI_KEY') return res.status(503).json({ message: error.message, code: error.code });
     if (error.response) {
       return res.status(502).json({ message: 'Lỗi khi gọi Gemini API', detail: error.response.data });
     }

@@ -176,3 +176,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
   font-size: 12px; font-family: 'IBM Plex Mono', monospace;
 }
 .pagination a.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ===== Alerts / Settings ===== */
+.alert { padding: 10px 12px; border-radius: var(--radius); font-size: 13px; margin-bottom: 16px; }
+.alert-success { background: var(--teal-soft); color: var(--teal); }
+.alert-error { background: #F4E4E0; color: var(--danger); }
+.hint { font-size: 12px; color: var(--text-muted); }
+.link { color: var(--teal); text-decoration: underline; }
+.kv { margin-bottom: 18px; border: 1px solid var(--hairline); border-radius: var(--radius); }
+.kv-row { display: flex; align-items: center; gap: 16px; padding: 10px 12px; border-bottom: 1px solid var(--hairline); }
+.kv-row:last-child { border-bottom: none; }
+.kv-label { width: 140px; flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
+.kv-value { margin: 0 6px; }

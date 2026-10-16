@@ -450,6 +450,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     required String wordLang,
     required String meaningLang,
     required TextStyle style,
+    required String sentenceId,
   }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -459,6 +460,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
             text: text,
             style: style,
             selection: _selection,
+            sentenceId: sentenceId,
             wordLang: wordLang,
             meaningLang: meaningLang,
           ),
@@ -583,6 +585,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
                         ),
                         const SizedBox(height: 2),
                         _sentenceRow(
+                          sentenceId: '$key:src',
                           text: segment.sourceText,
                           what: 'câu nguồn',
                           wordLang: widget.item.sourceLanguage,
@@ -600,6 +603,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
                         ),
                         const SizedBox(height: 2),
                         _sentenceRow(
+                          sentenceId: '$key:dst',
                           text: segment.translatedText,
                           what: 'câu đích',
                           wordLang: widget.item.targetLanguage,

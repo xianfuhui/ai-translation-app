@@ -133,7 +133,9 @@ the AI chat tab returns a friendly error bubble until you provide a key.
 | Script | What it does |
 |---|---|
 | `npm run seed:admin` | Create the admin account |
-| `npm run seed:data` | Reset base sample data (languages, models, word bank, demo users) |
+| `npm run seed:data` | **Wipes the whole DB** (users incl. admin, vocabulary, history, models, uploaded model files; keeps `settings`), then recreates admin + base sample data |
+| `npm run seed:reset` | Wipe the DB and recreate only the admin (`-- --with-settings` also clears the saved Gemini key) |
+| `npm run seed:all` | `seed:data` then `seed:rich` in one go |
 | `npm run db:sync` | Attach `$jsonSchema` validators to all 7 collections and `syncIndexes()` (drops stale indexes). Idempotent — safe to re-run |
 | `npm run seed:rich` | Bulk data for demos: 15 learners, ~250 vocabulary entries, ~2,500 histories spread over 120 days, AI conversations. Deterministic seed — re-running replaces its own batch |
 

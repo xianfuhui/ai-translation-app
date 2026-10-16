@@ -200,6 +200,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     Color? color,
     int? maxLines,
     double top = 8,
+    required String sentenceId,
   }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -217,6 +218,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 color: color,
               ),
               selection: _selection,
+              sentenceId: sentenceId,
               wordLang: wordLang,
               meaningLang: meaningLang,
             ),
@@ -324,12 +326,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           ] else ...[
             _sentence(
+              sentenceId: '${item.id}:src',
               text: source,
               what: 'câu nguồn',
               wordLang: item.sourceLanguage,
               meaningLang: item.targetLanguage,
             ),
             _sentence(
+              sentenceId: '${item.id}:dst',
               text: target,
               what: 'câu đích',
               wordLang: item.targetLanguage,

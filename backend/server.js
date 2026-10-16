@@ -15,6 +15,7 @@ const historyRoutes = require('./src/routes/historyRoutes');
 const languageRoutes = require('./src/routes/languageRoutes');
 const statsRoutes = require('./src/routes/statsRoutes');
 const modelRoutes = require('./src/routes/modelRoutes');
+const settingsRoutes = require('./src/routes/settingsRoutes');
 
 const app = express();
 
@@ -41,6 +42,7 @@ app.use('/api/history', historyRoutes); // Lịch sử hoạt động
 app.use('/api/languages', languageRoutes); // Ngôn ngữ hỗ trợ
 app.use('/api/stats', statsRoutes); // Thống kê hệ thống (Admin)
 app.use('/api/models', modelRoutes); // Kho model Vosk (STT) + ML Kit (dịch)
+app.use('/api/settings', settingsRoutes); // Cấu hình hệ thống (Gemini API key...) - Admin
 
 // Xử lý lỗi
 app.use(notFound);

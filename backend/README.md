@@ -25,7 +25,9 @@ cd backend
 cp .env.example .env     # rồi điền MONGO_URI, JWT_SECRET, GEMINI_API_KEY...
 npm install
 npm run seed:admin        # tạo tài khoản admin đầu tiên
-npm run seed:data         # (tùy chọn) tạo dữ liệu mẫu để kiểm thử
+npm run seed:data         # (tùy chọn) XÓA SẠCH DB rồi tạo lại admin + dữ liệu mẫu
+npm run seed:all          # xóa sạch + seed:data + seed:rich (đầy đủ nhất)
+npm run seed:reset        # chỉ xóa sạch DB + tạo lại admin (thêm -- --with-settings để xóa cả Gemini key)
 npm run dev                # hoặc: npm start
 ```
 

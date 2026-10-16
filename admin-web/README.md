@@ -33,6 +33,7 @@ Vào `http://localhost:4000/login`, dùng email/mật khẩu admin đã seed (m�
 | Kho từ vựng | `/vocabulary` | Thêm/xóa từ vựng hệ thống, tìm kiếm theo chủ đề |
 | Lịch sử dịch | `/history` | Xem & xóa lịch sử dịch thuật toàn hệ thống, lọc theo ngày |
 | Ngôn ngữ & Model | `/languages` | Thêm/bật-tắt/xóa ngôn ngữ; mỗi ngôn ngữ có mục quản lý model Vosk (STT) và ML Kit (dịch) riêng — thêm/sửa/xóa, **upload file model trực tiếp** (.zip, .tflite...) hoặc dán link tải ngoài |
+| Cài đặt | `/settings` | Admin tự nhập/đổi **Gemini API key** + model (lưu mã hóa trong DB, có nút thử kết nối), và **đổi mật khẩu** tài khoản admin |
 
 ## 5. Kiến trúc
 

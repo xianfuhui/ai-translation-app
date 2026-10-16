@@ -1,7 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../core/theme.dart';
-import '../services/translation_service.dart';
+import 'add_word_dialog.dart';
 import '../services/vocabulary_service.dart';
 
 /// Từ = chuỗi chữ/số Unicode (cho phép ' và - ở giữa từ, vd "don't", "well-known").
@@ -9,32 +9,52 @@ import '../services/vocabulary_service.dart';
 final RegExp _wordPattern =
     RegExp(r"[\p{L}\p{N}][\p{L}\p{N}'’\-]*", unicode: true);
 
-/// Một từ người dùng đã chọn (kèm ngôn ngữ của từ và của nghĩa).
-class SelectedWord {
-  final String word;
+/// Một từ đã chọn: nằm ở đâu trong câu nào (để ghép các từ liền nhau thành cụm).
+class _PickedWord {
+  final String sentenceId;
+  final String text; // cả câu chứa từ này
+  final int start;
+  final int end;
   final String wordLang;
   final String meaningLang;
-  const SelectedWord(this.word, this.wordLang, this.meaningLang);
+  const _PickedWord(
+    this.sentenceId,
+    this.text,
+    this.start,
+    this.end,
+    this.wordLang,
+    this.meaningLang,
+  );
 }
 
-/// Tập các từ đang được chọn trên 1 màn hình. Chạm từ = chọn / bỏ chọn;
-/// chỉ khi bấm "Lưu vào sổ tay" ở thanh chốt thì mới lưu.
-class WordSelection extends ChangeNotifier {
-  final Map<String, SelectedWord> _items = {};
+/// Kết quả sau khi gộp: 1 từ hoặc 1 cụm từ cần lưu.
+class SelectedPhrase {
+  final String text;
+  final String wordLang;
+  final String meaningLang;
+  const SelectedPhrase(this.text, this.wordLang, this.meaningLang);
+}
 
-  String _key(String word, String lang) => '$lang|${word.toLowerCase()}';
+/// Tập các từ đang được chọn trên 1 màn hình. Chạm từ = chọn / bỏ chọn; chỉ khi
+/// bấm "Lưu vào sổ tay" ở thanh chốt thì mới lưu.
+///  - Chọn 1 từ riêng lẻ  -> lưu đúng từ đó.
+///  - Chọn nhiều từ LIỀN NHAU trong cùng 1 câu -> gộp lại, lưu nguyên cụm.
+class WordSelection extends ChangeNotifier {
+  final Map<String, _PickedWord> _items = {};
+
+  String _key(String sentenceId, int start) => '$sentenceId#$start';
+
+  bool isSelected(String sentenceId, int start) =>
+      _items.containsKey(_key(sentenceId, start));
 
   bool get isEmpty => _items.isEmpty;
-  int get count => _items.length;
-  List<SelectedWord> get items => _items.values.toList();
 
-  bool contains(String word, String lang) => _items.containsKey(_key(word, lang));
+  /// Số mục sẽ lưu (từ đơn hoặc cụm), sau khi gộp các từ liền nhau.
+  int get count => phrases().length;
 
-  void toggle(String word, String wordLang, String meaningLang) {
-    final k = _key(word, wordLang);
-    if (_items.remove(k) == null) {
-      _items[k] = SelectedWord(word, wordLang, meaningLang);
-    }
+  void toggle(_PickedWord w) {
+    final k = _key(w.sentenceId, w.start);
+    if (_items.remove(k) == null) _items[k] = w;
     notifyListeners();
   }
 
@@ -43,13 +63,48 @@ class WordSelection extends ChangeNotifier {
     _items.clear();
     notifyListeners();
   }
+
+  /// Gộp các từ liền nhau (giữa chúng không còn từ nào khác, chỉ có dấu cách /
+  /// dấu câu) trong cùng 1 câu thành cụm; các từ rời nhau thành mục riêng.
+  List<SelectedPhrase> phrases() {
+    final bySentence = <String, List<_PickedWord>>{};
+    for (final w in _items.values) {
+      bySentence.putIfAbsent(w.sentenceId, () => []).add(w);
+    }
+    final result = <SelectedPhrase>[];
+    for (final group in bySentence.values) {
+      group.sort((a, b) => a.start.compareTo(b.start));
+      var runStart = group.first;
+      var runEnd = group.first;
+      void flush() => result.add(SelectedPhrase(
+            runStart.text.substring(runStart.start, runEnd.end),
+            runStart.wordLang,
+            runStart.meaningLang,
+          ));
+      for (final w in group.skip(1)) {
+        final between = w.text.substring(runEnd.end, w.start);
+        final adjacent = !_wordPattern.hasMatch(between);
+        if (adjacent) {
+          runEnd = w;
+        } else {
+          flush();
+          runStart = w;
+          runEnd = w;
+        }
+      }
+      flush();
+    }
+    return result;
+  }
 }
 
 class _Token {
   final String text;
+  final int start;
+  final int end;
   final bool isWord;
   final TapGestureRecognizer? recognizer;
-  const _Token(this.text, this.isWord, this.recognizer);
+  const _Token(this.text, this.start, this.end, this.isWord, this.recognizer);
 }
 
 /// Đoạn chữ mà từng từ chạm được để CHỌN (tô nền khi đã chọn). Chọn 1 hoặc
@@ -60,6 +115,10 @@ class TappableWords extends StatefulWidget {
   final int? maxLines;
   final TextOverflow? overflow;
   final WordSelection selection;
+
+  /// Định danh duy nhất của câu này trên màn hình (vd "<idMục>:<lượt>:nguồn").
+  /// Dùng để biết các từ nào cùng 1 câu và liền nhau -> ghép thành cụm.
+  final String sentenceId;
   final String wordLang; // ngôn ngữ của đoạn chữ này
   final String meaningLang; // ngôn ngữ dùng để ghi nghĩa
 
@@ -67,6 +126,7 @@ class TappableWords extends StatefulWidget {
     super.key,
     required this.text,
     required this.selection,
+    required this.sentenceId,
     required this.wordLang,
     required this.meaningLang,
     this.style,
@@ -94,14 +154,25 @@ class _TappableWordsState extends State<TappableWords> {
     final tokens = <_Token>[];
     var last = 0;
     for (final m in _wordPattern.allMatches(text)) {
-      if (m.start > last) tokens.add(_Token(text.substring(last, m.start), false, null));
-      final word = m.group(0)!;
+      if (m.start > last) {
+        tokens.add(_Token(text.substring(last, m.start), last, m.start, false, null));
+      }
+      final start = m.start, end = m.end;
       final recognizer = TapGestureRecognizer()
-        ..onTap = () => widget.selection.toggle(word, widget.wordLang, widget.meaningLang);
-      tokens.add(_Token(word, true, recognizer));
+        ..onTap = () => widget.selection.toggle(_PickedWord(
+              widget.sentenceId,
+              widget.text,
+              start,
+              end,
+              widget.wordLang,
+              widget.meaningLang,
+            ));
+      tokens.add(_Token(m.group(0)!, start, end, true, recognizer));
       last = m.end;
     }
-    if (last < text.length) tokens.add(_Token(text.substring(last), false, null));
+    if (last < text.length) {
+      tokens.add(_Token(text.substring(last), last, text.length, false, null));
+    }
     _tokens = tokens;
     _builtFor = text;
   }
@@ -128,7 +199,7 @@ class _TappableWordsState extends State<TappableWords> {
                   TextSpan(
                     text: t.text,
                     recognizer: t.recognizer,
-                    style: widget.selection.contains(t.text, widget.wordLang)
+                    style: widget.selection.isSelected(widget.sentenceId, t.start)
                         ? const TextStyle(
                             backgroundColor: AppTheme.coralTint,
                             color: AppTheme.coral,
@@ -163,6 +234,10 @@ class WordSelectionBar extends StatelessWidget {
       listenable: selection,
       builder: (context, _) {
         if (selection.isEmpty) return const SizedBox.shrink();
+        final phrases = selection.phrases();
+        final label = phrases.length == 1
+            ? 'Đã chọn: ${phrases.first.text}'
+            : 'Đã chọn ${phrases.length} mục';
         return Material(
           color: AppTheme.ivory,
           elevation: 8,
@@ -174,7 +249,9 @@ class WordSelectionBar extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Đã chọn ${selection.count} từ',
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                   ),
@@ -200,148 +277,55 @@ class WordSelectionBar extends StatelessWidget {
   }
 }
 
-/// Mở hộp thoại ghi nghĩa cho các từ đã chọn rồi lưu hết vào sổ tay.
+/// Lưu các mục đã chọn: mỗi mục (từ hoặc cụm) mở 1 bảng "Thêm từ" giống bên Sổ
+/// tay — đã điền sẵn từ/cụm, hai ngôn ngữ, và tự gợi ý nghĩa nếu có gói.
 Future<void> saveSelectedWords(BuildContext context, WordSelection selection) async {
-  final picked = selection.items;
-  if (picked.isEmpty) return;
-  final meanings = await showDialog<List<String>>(
-    context: context,
-    builder: (_) => _SaveWordsDialog(words: picked),
-  );
-  if (meanings == null) return;
-
+  final phrases = selection.phrases();
+  if (phrases.isEmpty) return;
   final service = VocabularyService();
   var saved = 0;
+  var cancelled = false;
   Object? lastError;
-  for (var i = 0; i < picked.length; i++) {
+
+  for (var i = 0; i < phrases.length; i++) {
+    final p = phrases[i];
+    final many = phrases.length > 1;
+    final result = await showDialog<NewWord>(
+      context: context,
+      builder: (_) => AddWordDialog(
+        title: many ? 'Thêm từ (${i + 1}/${phrases.length})' : 'Thêm từ mới',
+        initialWord: p.text,
+        initialFromCode: p.wordLang,
+        initialToCode: p.meaningLang,
+        autoSuggest: true,
+        skipLabel: many && i < phrases.length - 1 ? 'Bỏ qua' : null,
+      ),
+    );
+    if (result == null) {
+      cancelled = true; // Hủy -> dừng cả loạt
+      break;
+    }
+    if (result.skipped) continue;
     try {
       await service.saveVocabulary(
-        word: picked[i].word,
-        meaning: meanings[i],
-        sourceLanguage: picked[i].wordLang,
-        targetLanguage: picked[i].meaningLang,
+        word: result.word,
+        meaning: result.meaning,
+        sourceLanguage: result.sourceCode,
+        targetLanguage: result.targetCode,
         source: 'conversation',
       );
       saved++;
     } catch (e) {
       lastError = e;
     }
+    if (!context.mounted) return;
   }
-  if (saved > 0) selection.clear();
-  if (!context.mounted) return;
+
+  if (!cancelled && saved > 0) selection.clear();
+  if (!context.mounted || (saved == 0 && lastError == null)) return;
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
     content: Text(lastError == null
-        ? 'Đã lưu $saved từ vào sổ tay'
-        : 'Đã lưu $saved/${picked.length} từ. Lỗi: $lastError'),
+        ? 'Đã lưu $saved mục vào sổ tay'
+        : 'Đã lưu $saved mục. Lỗi: $lastError'),
   ));
-}
-
-class _SaveWordsDialog extends StatefulWidget {
-  final List<SelectedWord> words;
-  const _SaveWordsDialog({required this.words});
-
-  @override
-  State<_SaveWordsDialog> createState() => _SaveWordsDialogState();
-}
-
-class _SaveWordsDialogState extends State<_SaveWordsDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _translation = TranslationService();
-  late final List<TextEditingController> _controllers = [
-    for (final _ in widget.words) TextEditingController(),
-  ];
-  bool _suggesting = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _suggestAll();
-  }
-
-  /// Gợi ý nghĩa bằng ML Kit nếu hai gói ngôn ngữ đã tải (không tự tải).
-  Future<void> _suggestAll() async {
-    for (var i = 0; i < widget.words.length; i++) {
-      final w = widget.words[i];
-      try {
-        final ok = w.wordLang != w.meaningLang &&
-            _translation.isSupported(w.wordLang) &&
-            _translation.isSupported(w.meaningLang) &&
-            await _translation.isModelDownloaded(w.wordLang) &&
-            await _translation.isModelDownloaded(w.meaningLang);
-        if (!ok) continue;
-        final result = await _translation.translate(
-          text: w.word,
-          sourceCode: w.wordLang,
-          targetCode: w.meaningLang,
-        );
-        if (!mounted) return;
-        if (_controllers[i].text.isEmpty) _controllers[i].text = result;
-      } catch (_) {
-        // không gợi ý được -> người dùng tự nhập
-      }
-    }
-    if (mounted) setState(() => _suggesting = false);
-  }
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    _translation.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Lưu ${widget.words.length} từ vào sổ tay'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_suggesting)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: LinearProgressIndicator(minHeight: 2),
-                  ),
-                for (var i = 0; i < widget.words.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: TextFormField(
-                      controller: _controllers[i],
-                      decoration: InputDecoration(
-                        labelText: 'Nghĩa của "${widget.words[i].word}" *',
-                      ),
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? 'Vui lòng nhập nghĩa'
-                          : null,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Hủy'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) return;
-            Navigator.pop(context, [for (final c in _controllers) c.text.trim()]);
-          },
-          child: const Text('Lưu tất cả'),
-        ),
-      ],
-    );
-  }
 }

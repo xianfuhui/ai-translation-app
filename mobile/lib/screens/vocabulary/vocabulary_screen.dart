@@ -4,10 +4,8 @@ import '../../core/theme.dart';
 import '../../models/vocabulary.dart';
 import '../../core/api_exception.dart';
 import '../../core/backend_status.dart';
-import '../../models/language.dart';
-import '../../services/language_service.dart';
-import '../../services/translation_service.dart';
 import '../../services/vocabulary_service.dart';
+import '../../widgets/add_word_dialog.dart';
 import '../../widgets/connection_banner.dart';
 import 'flashcard_screen.dart';
 
@@ -146,9 +144,9 @@ class _MyVocabularyTabState extends State<_MyVocabularyTab>
   }
 
   Future<void> _addWord() async {
-    final result = await showDialog<_NewWord>(
+    final result = await showDialog<NewWord>(
       context: context,
-      builder: (_) => const _AddWordDialog(),
+      builder: (_) => const AddWordDialog(),
     );
     if (result == null) return;
     try {
@@ -899,202 +897,6 @@ class _SystemWordCard extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-
-// ════════════════════════════════════════════════════════════
-//  FORM TỰ THÊM TỪ
-// ════════════════════════════════════════════════════════════
-
-class _NewWord {
-  final String word;
-  final String meaning;
-  final String sourceCode; // ngôn ngữ của từ
-  final String targetCode; // ngôn ngữ của nghĩa
-  const _NewWord(this.word, this.meaning, this.sourceCode, this.targetCode);
-}
-
-class _AddWordDialog extends StatefulWidget {
-  const _AddWordDialog();
-
-  @override
-  State<_AddWordDialog> createState() => _AddWordDialogState();
-}
-
-class _AddWordDialogState extends State<_AddWordDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _word = TextEditingController();
-  final _meaning = TextEditingController();
-  final _translation = TranslationService();
-
-  List<LanguageModel> _languages = [];
-  LanguageModel? _from; // ngôn ngữ của từ
-  LanguageModel? _to; // ngôn ngữ của nghĩa
-  bool _suggesting = false;
-  String? _hint;
-
-  @override
-  void initState() {
-    super.initState();
-    LanguageService().getLanguages().then((langs) {
-      if (!mounted || langs.isEmpty) return;
-      setState(() {
-        _languages = langs;
-        _from = langs.first;
-        _to = langs.length > 1 ? langs[1] : langs.first;
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _word.dispose();
-    _meaning.dispose();
-    _translation.dispose();
-    super.dispose();
-  }
-
-  /// Gợi ý nghĩa bằng ML Kit (ngoại tuyến). Không tự tải gói — chỉ dùng nếu
-  /// hai gói ngôn ngữ đã có trên máy.
-  Future<void> _suggest() async {
-    final word = _word.text.trim();
-    final from = _from, to = _to;
-    if (word.isEmpty || from == null || to == null) return;
-    if (from.code == to.code) {
-      setState(() => _hint = 'Hai ngôn ngữ đang giống nhau.');
-      return;
-    }
-    setState(() {
-      _suggesting = true;
-      _hint = null;
-    });
-    try {
-      final ready = _translation.isSupported(from.code) &&
-          _translation.isSupported(to.code) &&
-          await _translation.isModelDownloaded(from.code) &&
-          await _translation.isModelDownloaded(to.code);
-      if (!ready) {
-        if (mounted) {
-          setState(() => _hint =
-              'Cần tải gói ngôn ngữ trước (Cá nhân → Gói ngoại tuyến) mới gợi ý được.');
-        }
-        return;
-      }
-      final result = await _translation.translate(
-        text: word,
-        sourceCode: from.code,
-        targetCode: to.code,
-      );
-      if (mounted) _meaning.text = result;
-    } catch (e) {
-      if (mounted) setState(() => _hint = 'Không gợi ý được: $e');
-    } finally {
-      if (mounted) setState(() => _suggesting = false);
-    }
-  }
-
-  Widget _langPicker(String label, LanguageModel? value, ValueChanged<LanguageModel?> onChanged) {
-    return DropdownButtonFormField<LanguageModel>(
-      // key đổi theo giá trị -> ô chọn cập nhật khi danh sách ngôn ngữ tải xong.
-      key: ValueKey('$label|${value?.code}|${_languages.length}'),
-      initialValue: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label),
-      items: [
-        for (final l in _languages)
-          DropdownMenuItem(value: l, child: Text(l.name, overflow: TextOverflow.ellipsis)),
-      ],
-      onChanged: onChanged,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Thêm từ mới'),
-      content: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _word,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: 'Từ *'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Vui lòng nhập từ' : null,
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: _langPicker('Ngôn ngữ của từ', _from, (v) => setState(() => _from = v)),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _langPicker('Ngôn ngữ của nghĩa', _to, (v) => setState(() => _to = v)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _meaning,
-                decoration: InputDecoration(
-                  labelText: 'Nghĩa của từ *',
-                  suffixIcon: _suggesting
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: SizedBox(
-                            height: 14,
-                            width: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : IconButton(
-                          tooltip: 'Gợi ý nghĩa',
-                          icon: const Icon(Icons.auto_awesome_rounded, size: 20),
-                          onPressed: _suggest,
-                        ),
-                ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Vui lòng nhập nghĩa của từ'
-                    : null,
-              ),
-              if (_hint != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(_hint!, style: const TextStyle(fontSize: 12)),
-                ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Hủy'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) return;
-            final from = _from, to = _to;
-            Navigator.pop(
-              context,
-              _NewWord(
-                _word.text.trim(),
-                _meaning.text.trim(),
-                from?.code ?? '',
-                to?.code ?? '',
-              ),
-            );
-          },
-          child: const Text('Lưu vào sổ tay'),
-        ),
-      ],
     );
   }
 }
